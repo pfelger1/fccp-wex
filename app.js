@@ -218,6 +218,7 @@
     var token = S.token; if (!token) return Promise.resolve(false);
     var seq = ++statusSeq;
     if (showBusy) { S.busy = S.busy || 'status'; render(); }
+    loadDetails(token);   // 2026-10-24: hours remaining / sick time load at the same time, not after
     return api({ action: 'statusCore', token: token }).then(function (x) {
       if (x.r.ok === false && /unknown.*action/i.test(errText(x.r, ''))) return api({ action: 'status', token: token });
       return x;
@@ -230,7 +231,6 @@
       S.status = Object.assign({}, keep, x.r);
       if (x.r.timecard && x.r.timecard.closed === false) S.closedLocal = false;
       S.statusLoaded = true; S.statusFailed = false; S.error = '';
-      loadDetails(token, seq);
       return true;
     }).catch(function (e) {
       if (seq !== statusSeq) return false;
@@ -240,9 +240,13 @@
       render();
     });
   }
-  function loadDetails(token, seq) {
+  // Balances do not change with punch state, so the newest answer that arrives is always used.
+  var detailsSeq = 0, detailsShown = 0;
+  function loadDetails(token) {
+    var mySeq = ++detailsSeq;
     api({ action: 'statusDetails', token: token }).then(function (x) {
-      if (token !== S.token || seq < statusSeq - 0 && seq !== statusSeq) return;
+      if (token !== S.token || mySeq < detailsShown) return;
+      detailsShown = mySeq;
       if (isExpired(x.resp, x.r)) { expired(); return; }
       if (!x.resp.ok || x.r.ok === false) throw new Error();
       S.status = Object.assign({}, S.status || {}, { balances: x.r.balances, lowHoursWarning: x.r.lowHoursWarning, mealWarning: x.r.mealWarning });
@@ -728,7 +732,7 @@
   function renderShifts(closed) {
     var cur = S.shiftsPeriod || (S.status && S.status.payPeriod) || {};
     var h = '<section class="section"><div><h2 class="h2">This Pay Period</h2><p class="small green mt1">' + esc(fmtMDY(cur.start)) + ' to ' + esc(fmtMDY(cur.end)) + '</p></div>' +
-      '<button class="btn btn-inline mt4" data-act="missed"' + (!S.statusLoaded || closed ? ' disabled' : '') + '>Add Missed Shift</button>';
+      '<button class="btn btn-green btn-inline mt4" data-act="missed"' + (!S.statusLoaded || closed ? ' disabled' : '') + '>Add Missed Shift</button>';
     if (S.shiftsError) h += alertHtml(S.shiftsError);
     else if (!S.shiftsLoaded) h += '<p class="small muted mt4">Loading shifts...</p>';
     else {
@@ -762,7 +766,7 @@
     if (e.corrected === true) h += '<span class="chip chip-sm mt3">Corrected</span> ';
     if (e.manuallyAdded === true) h += '<span class="chip chip-sm mt3">Added</span> ';
     if (held) h += '<span class="chip chip-sm chip-warn mt3">Waiting to go on your timesheet</span>';
-    if (canEdit) h += '<button class="btn edit-btn" data-edit="' + esc(e.punchId) + '">' + (e.endTime ? 'Edit this shift' : 'Add clock-out time') + ' <span aria-hidden="true">›</span></button>';
+    if (canEdit) h += '<button class="btn btn-green edit-btn" data-edit="' + esc(e.punchId) + '">' + (e.endTime ? 'Edit this shift' : 'Add clock-out time') + ' <span aria-hidden="true">›</span></button>';
     return h + '</article>';
   }
 

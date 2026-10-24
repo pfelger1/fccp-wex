@@ -91,6 +91,8 @@ label.field { display: block; font-size: 14px; font-weight: 600; margin-top: 16p
 .btn-primary { background: var(--ink); border-color: var(--ink); color: #fff; }
 .btn-primary:hover:not(:disabled) { background: var(--ink-hover); }
 .btn-big { min-height: 64px; font-size: 20px; border-radius: 16px; }
+.btn-green { background: #3c7a1c; border-color: #3c7a1c; color: #fff; }
+.btn-green:hover:not(:disabled) { background: #2f6315; }
 .btn-inline { display: inline-block; width: auto; }
 .link { background: none; border: none; padding: 0; color: var(--green); font-weight: 600; font-size: 14px; }
 .link:hover:not(:disabled) { color: var(--ink); }
