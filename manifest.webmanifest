@@ -1,0 +1,15 @@
+{
+  "name": "FCCP WEX Timekeeping",
+  "short_name": "FCCP WEX",
+  "description": "Participant timekeeping for FCCP WEX programs.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f5f5fa",
+  "theme_color": "#1b1464",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

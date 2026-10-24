@@ -8,6 +8,9 @@
   <title>FCCP WEX Timekeeping</title>
   <link rel="icon" href="favicon.png" type="image/png">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="FCCP WEX">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -17,5 +20,6 @@
   <noscript><p style="padding:24px">This page needs JavaScript turned on.</p></noscript>
   <script src="config.js"></script>
   <script src="app.js"></script>
+  <script>if ('serviceWorker' in navigator) { window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); }); }</script>
 </body>
 </html>
