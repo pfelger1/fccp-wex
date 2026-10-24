@@ -587,7 +587,7 @@
   function brand(sub) {
     return '<div class="brand"><div class="brand-mark">' + logoHtml() + '</div><div style="min-width:0"><p class="brand-name">FCCP WEX</p>' + (sub ? '<p class="brand-sub">' + sub + '</p>' : '') + '</div></div>';
   }
-  function logoHtml() { return '<img src="fccp-logo.png" alt="Folsom Cordova Community Partnership" onerror="this.parentNode.textContent=\'FCCP\'">'; }
+  function logoHtml() { return '<img src="fccp-logo.png" alt="Folsom Cordova Community Partnership" onerror="this.parentNode.classList.add(\'no-logo\');this.parentNode.textContent=\'FCCP\'">'; }
   function alertHtml(t) { return t ? '<p role="alert" class="alert">' + esc(t) + '</p>' : ''; }
 
   function render() {
@@ -619,7 +619,7 @@
   function renderActivate() {
     var b = S.busy;
     return '<main class="center-screen"><section class="split"><div class="split-left">' +
-      '<div style="display:flex;align-items:center;gap:12px;margin-bottom:56px"><div class="brand-mark" style="background:#fff;color:var(--ink);height:56px">' + logoHtml() + '</div><div><p class="small strong" style="letter-spacing:.18em">FCCP</p><p class="xs" style="color:#c8d9cd">WEX TIMEKEEPING</p></div></div>' +
+      '<div style="display:flex;align-items:center;gap:12px;margin-bottom:56px"><div class="brand-mark big">' + logoHtml() + '</div><div><p class="small strong" style="letter-spacing:.18em">FCCP</p><p class="xs" style="color:#c8d9cd">WEX TIMEKEEPING</p></div></div>' +
       '<p class="small strong" style="text-transform:uppercase;letter-spacing:.16em;color:var(--gold)">Participant setup</p>' +
       '<h1 class="mt4" style="font-size:36px;font-weight:600;line-height:1.15">Create your private PIN.</h1>' +
       '<p class="mt5" style="color:#dce9df;line-height:1.75">Use the participant code and one-time activation code provided by FCCP. Your PIN is private—FCCP staff cannot see it.</p></div>' +
