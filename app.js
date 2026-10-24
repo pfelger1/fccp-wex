@@ -619,10 +619,10 @@
   function renderActivate() {
     var b = S.busy;
     return '<main class="center-screen"><section class="split"><div class="split-left">' +
-      '<div style="display:flex;align-items:center;gap:12px;margin-bottom:56px"><div class="brand-mark big">' + logoHtml() + '</div><div><p class="small strong" style="letter-spacing:.18em">FCCP</p><p class="xs" style="color:#c8d9cd">WEX TIMEKEEPING</p></div></div>' +
-      '<p class="small strong" style="text-transform:uppercase;letter-spacing:.16em;color:var(--gold)">Participant setup</p>' +
+      '<div style="display:flex;align-items:center;gap:12px;margin-bottom:56px"><div class="brand-mark big">' + logoHtml() + '</div><div><p class="small strong" style="letter-spacing:.18em">FCCP</p><p class="xs" style="color:#d4d1ea">WEX TIMEKEEPING</p></div></div>' +
+      '<p class="small strong" style="text-transform:uppercase;letter-spacing:.16em;color:var(--brand-green)">Participant setup</p>' +
       '<h1 class="mt4" style="font-size:36px;font-weight:600;line-height:1.15">Create your private PIN.</h1>' +
-      '<p class="mt5" style="color:#dce9df;line-height:1.75">Use the participant code and one-time activation code provided by FCCP. Your PIN is private—FCCP staff cannot see it.</p></div>' +
+      '<p class="mt5" style="color:#e4e2f2;line-height:1.75">Use the participant code and one-time activation code provided by FCCP. Your PIN is private—FCCP staff cannot see it.</p></div>' +
       '<div class="split-right"><p class="small strong green">First-time access</p><h2 class="mt2" style="font-size:24px;font-weight:600">Activate your account</h2>' +
       '<form data-form="activate" class="mt4">' +
       '<label class="field">Participant code<input id="code" class="input" data-model="code" value="' + esc(S.code) + '" placeholder="Participant code" autocomplete="username"></label>' +
@@ -873,9 +873,9 @@
     var dpr = window.devicePixelRatio || 1, r = c.getBoundingClientRect();
     c.width = Math.max(1, Math.floor(r.width * dpr)); c.height = Math.max(1, Math.floor(r.height * dpr));
     var ctx = c.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, r.width, r.height);
-    ctx.strokeStyle = '#15352d'; ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.strokeStyle = '#1b1464'; ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     function pt(e) { var b = c.getBoundingClientRect(); return { x: e.clientX - b.left, y: e.clientY - b.top }; }
-    c.addEventListener('pointerdown', function (e) { e.preventDefault(); c.setPointerCapture(e.pointerId); var p = pt(e); sigState.drawing = true; sigState.last = p; ctx.fillStyle = '#15352d'; ctx.beginPath(); ctx.arc(p.x, p.y, 1.5, 0, Math.PI * 2); ctx.fill(); if (S.modal && !S.modal.signed) { S.modal.signed = true; renderSubmitButtons(); } });
+    c.addEventListener('pointerdown', function (e) { e.preventDefault(); c.setPointerCapture(e.pointerId); var p = pt(e); sigState.drawing = true; sigState.last = p; ctx.fillStyle = '#1b1464'; ctx.beginPath(); ctx.arc(p.x, p.y, 1.5, 0, Math.PI * 2); ctx.fill(); if (S.modal && !S.modal.signed) { S.modal.signed = true; renderSubmitButtons(); } });
     c.addEventListener('pointermove', function (e) { if (!sigState.drawing) return; e.preventDefault(); var p = pt(e); ctx.beginPath(); ctx.moveTo(sigState.last.x, sigState.last.y); ctx.lineTo(p.x, p.y); ctx.stroke(); sigState.last = p; });
     function end(e) { if (!sigState.drawing) return; e.preventDefault(); sigState.drawing = false; sigState.last = null; try { c.releasePointerCapture(e.pointerId); } catch (x) {} }
     c.addEventListener('pointerup', end); c.addEventListener('pointercancel', end);
