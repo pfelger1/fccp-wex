@@ -126,6 +126,7 @@ dl.times dd { margin: 4px 0 0; font-weight: 600; }
 details.past { border: 1px solid var(--line-soft); border-radius: 16px; padding: 16px; margin-top: 12px; }
 details.past summary { list-style: none; cursor: pointer; }
 details.past summary::-webkit-details-marker { display: none; }
+.meal-note { margin-top: 12px; background: #e8f1fa; border-left: 4px solid #6a9bd1; border-radius: 8px; padding: 8px 12px; font-size: 14px; color: #23415f; }
 .past-shift { background: var(--tint); border-radius: 12px; padding: 12px; margin-top: 12px; }
 
 /* dialogs */

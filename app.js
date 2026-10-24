@@ -124,6 +124,10 @@
     if (t === 'OFF_CLOCK' || t === 'OFF CLOCK' || t === 'OFF' || t === 'CLOSED') return 'Off Clock';
     return s || '—';
   }
+  // "Regular w/Lunch Penalty" -> plain words for participants
+  function hasMealPremium(e) { return /lunch penalty/i.test(String((e && e.type) || '')); }
+  function typeLabel(t) { return /lunch penalty/i.test(String(t || '')) ? 'Regular + meal premium' : (t || ''); }
+  function mealChip(e) { return hasMealPremium(e) ? '<p class="meal-note">Meal premium: +1 hour of pay. You worked over 5 hours without a 30-minute lunch.</p>' : ''; }
   function isSuperseded(e) { return e.superseded === true || e.cancelled === true || [e.status, e.correctionStatus].some(function (s) { return ['SUPERSEDED', 'CANCELLED', 'CANCELED'].indexOf(String(s || '').toUpperCase()) >= 0; }); }
   function isClosed() { return (S.status && S.status.timecard && S.status.timecard.closed === true) || S.closedLocal; }
   function allowed() { return ((S.status && S.status.allowedActions) || []).map(function (a) { return String(a).toUpperCase(); }); }
@@ -683,7 +687,7 @@
     h += '<section class="section"><div class="row-between" style="align-items:center"><h2 class="h2">Today’s punches</h2><span class="small green">' + today.length + ' ' + (today.length === 1 ? 'shift' : 'shifts') + '</span></div>';
     if (!today.length) h += '<p class="small muted mt5">No punches have been returned for today.</p>';
     today.forEach(function (e, i) {
-      h += '<article class="shift"><p class="small strong green">Shift ' + (i + 1) + (e.type ? ' · ' + esc(e.type) : '') + '</p>' + timesDl(e, true) + '</article>';
+      h += '<article class="shift"><p class="small strong green">Shift ' + (i + 1) + (e.type ? ' · ' + esc(typeLabel(e.type)) : '') + '</p>' + timesDl(e, true) + mealChip(e) + '</article>';
     });
     h += '</section>';
 
@@ -762,7 +766,7 @@
     var held = String(e.sheetTab || '') === 'PENDING';
     // fix 2: the backend decides; a shift that was never clocked out comes back editable.
     var canEdit = e.editable === true && S.statusLoaded && !closed && e.punchId;
-    var h = '<article class="shift' + (held ? ' shift-held' : '') + '"><p class="strong">' + esc(fmtShort(e.workDate)) + '</p>' + timesDl(e, false);
+    var h = '<article class="shift' + (held ? ' shift-held' : '') + '"><p class="strong">' + esc(fmtShort(e.workDate)) + '</p>' + timesDl(e, false) + mealChip(e);
     if (e.corrected === true) h += '<span class="chip chip-sm mt3">Corrected</span> ';
     if (e.manuallyAdded === true) h += '<span class="chip chip-sm mt3">Added</span> ';
     if (held) h += '<span class="chip chip-sm chip-warn mt3">Waiting to go on your timesheet</span>';
@@ -850,7 +854,7 @@
       sh.forEach(function (e) {
         h += '<article class="shift"><p class="strong">' + esc(fmtShort(e.workDate)) + '</p><dl class="times"><div><dt>Clock In</dt><dd>' + fmtTime(e.startTime) + '</dd></div>' +
           (e.lunchOut || e.lunchIn ? '<div><dt>Lunch Out</dt><dd>' + fmtTime(e.lunchOut) + '</dd></div><div><dt>Lunch In</dt><dd>' + fmtTime(e.lunchIn) + '</dd></div>' : '') +
-          '<div><dt>Clock Out</dt><dd>' + fmtTime(e.endTime) + '</dd></div><div><dt>Type</dt><dd>' + esc(e.type || '—') + '</dd></div><div><dt>Worked hours</dt><dd>' + (hrs(e.hours != null ? e.hours : e.workedHours) || '—') + '</dd></div>' +
+          '<div><dt>Clock Out</dt><dd>' + fmtTime(e.endTime) + '</dd></div><div><dt>Type</dt><dd>' + esc(typeLabel(e.type) || '—') + '</dd></div><div><dt>Worked hours</dt><dd>' + (hrs(e.hours != null ? e.hours : e.workedHours) || '—') + '</dd></div>' +
           (Number(e.mealPremiumHours) > 0 ? '<div><dt>Meal premium hours</dt><dd>' + hrs(e.mealPremiumHours) + '</dd></div>' : '') + '</dl></article>';
       });
       if (rv.canSubmit !== true) h += '<p role="alert" class="alert">' + (Number(rv.openShiftCount) > 0 ? 'Clock out before submitting your timecard.' : 'This timecard cannot be submitted yet. Contact FCCP staff.') + '</p>';
