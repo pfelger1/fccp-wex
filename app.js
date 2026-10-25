@@ -789,6 +789,7 @@
     var state = String(st.state || '').toUpperCase();
     if (state === 'OPEN') return { tone: 'green', text: 'You’re clocked in. Working over 5 hours? Take a 30-minute lunch.' };
     if (state === 'LUNCH') return { tone: 'blue', text: 'Enjoy your lunch. Tap End Lunch when you’re back.' };
+    if (!S.shiftsLoaded) return null; // 2026-10-25: don't say "All set" before the shifts have loaded
     return { tone: 'green', text: 'All set ✓' };
   }
   function nextStepHtml() {
@@ -1071,6 +1072,7 @@
     if (m.step === 'done') return stepsHtml(3) + '<div role="status" class="done"><h2 class="title" style="font-size:24px">YOUR TIMECARD HAS BEEN SUBMITTED.</h2><p class="small muted mt3">Your timecard is closed. FCCP will reopen it if a correction is needed.</p></div>';
     if (m.step === 'sign') return stepsHtml(1) + '<h2 class="title" style="font-size:24px">Sign Your Timecard</h2><div class="panel small mt4"><p class="strong">' + esc(name) + '</p><p class="mt1">Pay period: ' + esc(fmtMDY(pp.start)) + ' to ' + esc(fmtMDY(pp.end)) + '</p>' +
       '<p class="mt1">Total countable hours: <b>' + (hrs(total) || '—') + '</b></p><p class="mt4">I certify that the time shown is complete and accurate and reflects all time I worked during this pay period. I understand that submitting this timecard closes my time for this pay period.</p></div>' +
+      '<p class="xs muted mt4 turn-tip">Tip: turn your phone sideways for a bigger signing box.</p>' +
       '<canvas id="sig" class="sig" aria-label="Draw your signature"></canvas><button class="btn btn-inline mt3" data-act="clearSig">Clear Signature</button>' + alertHtml(m.err) +
       '<div class="btn-row" id="sigButtons">' + sigButtons(m) + '</div>';
     var h = stepsHtml(0) + '<h2 class="title" style="font-size:24px">Review your timecard</h2><div class="notice-gold"><p class="strong">Submitting closes this pay period. If a correction is needed, FCCP can reopen it; you will get a message to review and submit again.</p></div>';
@@ -1113,12 +1115,30 @@
     c.width = Math.max(1, Math.floor(r.width * dpr)); c.height = Math.max(1, Math.floor(r.height * dpr));
     var ctx = c.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, r.width, r.height);
     ctx.strokeStyle = '#1b1464'; ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    function pt(e) { var b = c.getBoundingClientRect(); return { x: e.clientX - b.left, y: e.clientY - b.top }; }
+    // 2026-10-25: map the finger to the drawing using the box's current size (it changes when the phone turns).
+    function pt(e) { var b = c.getBoundingClientRect(), d = window.devicePixelRatio || 1; return { x: (e.clientX - b.left) * (c.width / d) / (b.width || 1), y: (e.clientY - b.top) * (c.height / d) / (b.height || 1) }; }
     c.addEventListener('pointerdown', function (e) { e.preventDefault(); c.setPointerCapture(e.pointerId); var p = pt(e); sigState.drawing = true; sigState.last = p; ctx.fillStyle = '#1b1464'; ctx.beginPath(); ctx.arc(p.x, p.y, 1.5, 0, Math.PI * 2); ctx.fill(); if (S.modal && !S.modal.signed) { S.modal.signed = true; renderSubmitButtons(); } });
     c.addEventListener('pointermove', function (e) { if (!sigState.drawing) return; e.preventDefault(); var p = pt(e); ctx.beginPath(); ctx.moveTo(sigState.last.x, sigState.last.y); ctx.lineTo(p.x, p.y); ctx.stroke(); sigState.last = p; });
     function end(e) { if (!sigState.drawing) return; e.preventDefault(); sigState.drawing = false; sigState.last = null; try { c.releasePointerCapture(e.pointerId); } catch (x) {} }
     c.addEventListener('pointerup', end); c.addEventListener('pointercancel', end);
   }
+  // 2026-10-25: when the phone turns, resize the signing box to its new shape and keep the signature.
+  function refitSignature() {
+    var c = sigState.canvas; if (!c || !document.body.contains(c)) return;
+    var d = window.devicePixelRatio || 1, r = c.getBoundingClientRect();
+    var w = Math.max(1, Math.floor(r.width * d)), h = Math.max(1, Math.floor(r.height * d));
+    if (w === c.width && h === c.height) return;
+    var old = document.createElement('canvas'); old.width = c.width; old.height = c.height; old.getContext('2d').drawImage(c, 0, 0);
+    c.width = w; c.height = h;
+    var ctx = c.getContext('2d'); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);
+    if (S.modal && S.modal.signed) { var k = Math.min(w / old.width, h / old.height); ctx.drawImage(old, (w - old.width * k) / 2, (h - old.height * k) / 2, old.width * k, old.height * k); }
+    ctx.setTransform(d, 0, 0, d, 0, 0); ctx.strokeStyle = '#1b1464'; ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    try { c.scrollIntoView({ block: 'start' }); } catch (e) {}
+  }
+  var sigTurnTimer = null;
+  function onTurn() { clearTimeout(sigTurnTimer); sigTurnTimer = setTimeout(refitSignature, 250); }
+  window.addEventListener('resize', onTurn);
+  window.addEventListener('orientationchange', onTurn);
   function clearSignature() {
     var c = document.getElementById('sig'); if (!c) return;
     var ctx = c.getContext('2d'), dpr = window.devicePixelRatio || 1;

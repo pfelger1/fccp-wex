@@ -235,3 +235,12 @@ details.srow summary::-webkit-details-marker { display: none; }
 .share-ico { width: 18px; height: 18px; vertical-align: -3px; color: #1a6fd1; }
 
 .section > .install-card:first-child { margin-top: 0; }
+/* 2026-10-25: phone turned sideways - wider dialog and a taller signing box */
+.turn-tip { display: none; }
+@media (orientation: portrait) and (pointer: coarse) { .turn-tip { display: block; } }
+@media (orientation: landscape) and (max-height: 540px) {
+  .overlay { padding: 8px; }
+  .dialog { max-width: 760px; padding: 14px 18px; border-radius: 16px; }
+  canvas.sig { height: max(140px, calc(100vh - 190px)); margin-top: 12px; }
+}
+
