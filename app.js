@@ -61,6 +61,9 @@
   var UA = navigator.userAgent || '';
   var IS_IOS = /iPhone|iPad|iPod/i.test(UA) || (/Macintosh/.test(UA) && navigator.maxTouchPoints > 1);
   var IS_ANDROID = /Android/i.test(UA);
+  // 2026-10-25: pages opened inside another app's built-in browser (Google app, Facebook, Instagram,
+  // LinkedIn, Snapchat...) cannot be added to the home screen; they must be opened in Safari first.
+  var IN_APP = IS_IOS && /\bGSA\/|FBAN|FBAV|Instagram|LinkedInApp|Snapchat|Line\/|MicroMessenger|TikTok/i.test(UA);
   function isInstalled() { try { return S.installed || window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true; } catch (e) { return S.installed; } }
   function installDismissed() { var t = Number(sGet('localStorage', 'wexInstallLater') || 0); return t && Date.now() - t < 14 * 86400000; }
   window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); installEvt = e; render(); });
@@ -74,8 +77,10 @@
     else if (IS_IOS) body = '<ol class="install-steps small mt2"><li>Don\u2019t see buttons at the bottom? Tap the web address at the bottom of the screen.</li>' +
       '<li>Tap the <b>Share</b> button ' + shareIcon + '. (On newer iPhones, tap <b>&#8226;&#8226;&#8226;</b> first, then <b>Share</b>.)</li>' +
       '<li>Scroll down, tap <b>Add to Home Screen</b>, then <b>Add</b>.</li></ol>' +
-      '<p class="xs mt2">Not there? Open this page in a regular Safari tab, not a Private tab.</p>';
-    else body = '<ol class="install-steps small mt2"><li>Tap the browser menu <b>&#8942;</b> (top or bottom corner).</li><li>Tap <b>Install app</b> or <b>Add to Home screen</b>.</li></ol>';
+      '<p class="xs mt2">Don\u2019t see <b>Add to Home Screen</b>? You may be in a Private tab. In Safari, tap the tabs button (two squares), switch from <b>Private</b> to a regular tab, then open this page again.</p>';
+    else if (!IS_IOS) body = '<ol class="install-steps small mt2"><li>Tap the browser menu <b>&#8942;</b> (top or bottom corner).</li><li>Tap <b>Install app</b> or <b>Add to Home screen</b>.</li></ol>';
+    if (IN_APP && !installEvt) body = '<p class="small mt1">You opened this inside another app. To install it, open it in <b>Safari</b>: tap <b>&#8226;&#8226;&#8226;</b> or the share button and choose <b>Open in Safari</b>. Or copy the link and paste it into Safari.</p>' +
+      '<button type="button" class="btn mt3" data-act="copyLink">' + (S.linkCopied ? 'Link copied \u2713' : 'Copy link') + '</button>';
     return '<div class="install-card"><p class="strong">&#128241; Install the app on your phone</p>' + body +
       (always ? '' : '<button type="button" class="link mt3" data-act="installLater">Not now</button>') + '</div>';
   }
@@ -1230,6 +1235,9 @@
       case 'install': doInstall(); break;
       case 'missedFrom': openMissed(el.getAttribute('data-date')); break;
       case 'noEarlier': sSet('localStorage', earlyKey(), 'yes'); render(); break;
+      case 'copyLink':
+        try { navigator.clipboard.writeText(location.origin + location.pathname).then(function () { S.linkCopied = true; render(); }, function () {}); } catch (err) {}
+        break;
       case 'installLater': sSet('localStorage', 'wexInstallLater', String(Date.now())); render(); break;
     }
   });
