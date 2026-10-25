@@ -56,6 +56,34 @@
   function showToast(t) { S.toast = t; render(); clearTimeout(toastTimer); toastTimer = setTimeout(function () { S.toast = ''; render(); }, 3500); }
   function maybeShowGuide(force) { if (force || sGet('localStorage', 'wexGuideSeen') !== 'yes') { S.guide = 0; render(); } }
   function closeGuide() { S.guide = null; sSet('localStorage', 'wexGuideSeen', 'yes'); render(); }
+  // 2026-10-25: "Install the app on your phone" card (sign-in, first-time setup, More tab).
+  var installEvt = null;
+  var UA = navigator.userAgent || '';
+  var IS_IOS = /iPhone|iPad|iPod/i.test(UA) || (/Macintosh/.test(UA) && navigator.maxTouchPoints > 1);
+  var IS_ANDROID = /Android/i.test(UA);
+  function isInstalled() { try { return S.installed || window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true; } catch (e) { return S.installed; } }
+  function installDismissed() { var t = Number(sGet('localStorage', 'wexInstallLater') || 0); return t && Date.now() - t < 14 * 86400000; }
+  window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); installEvt = e; render(); });
+  window.addEventListener('appinstalled', function () { S.installed = true; installEvt = null; render(); });
+  function installCard(always) {
+    if (isInstalled() || (!always && installDismissed())) return '';
+    if (!installEvt && !IS_IOS && !IS_ANDROID) return '';
+    var shareIcon = '<svg class="share-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M8 7l4-4 4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 11v9h12v-9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    var body;
+    if (installEvt) body = '<p class="small mt1">Put FCCP WEX on your home screen so it opens like an app.</p><button type="button" class="btn btn-go mt3" data-act="install">Install the app</button>';
+    else if (IS_IOS) body = '<ol class="install-steps small mt2"><li>Tap the <b>Share</b> button ' + shareIcon + ' at the bottom (or top) of the screen.</li><li>Tap <b>Add to Home Screen</b>, then <b>Add</b>.</li></ol>';
+    else body = '<ol class="install-steps small mt2"><li>Tap the browser menu <b>&#8942;</b> (top or bottom corner).</li><li>Tap <b>Install app</b> or <b>Add to Home screen</b>.</li></ol>';
+    return '<div class="install-card"><p class="strong">&#128241; Install the app on your phone</p>' + body +
+      (always ? '' : '<button type="button" class="link mt3" data-act="installLater">Not now</button>') + '</div>';
+  }
+  function doInstall() {
+    if (!installEvt) return;
+    var e = installEvt; installEvt = null;
+    try {
+      e.prompt();
+      e.userChoice.then(function (c) { if (c && c.outcome === 'accepted') { S.installed = true; if (S.view === 'home') showToast('App installed. Open it from your home screen.'); else render(); } else render(); }).catch(function () { render(); });
+    } catch (err) { render(); }
+  }
   var statusSeq = 0;          // fix 3: only the newest status request may update the screen
   var pollTimer = null;
 
@@ -631,7 +659,7 @@
   function renderLogin() {
     var b = S.busy;
     return '<main class="center-screen"><form class="card-xl" data-form="login">' + brand('') +
-      '<h1 class="title mt6">Welcome back</h1><p class="small muted mt3">Enter your participant code and the PIN you created during activation.</p>' +
+      '<h1 class="title mt6">Welcome back</h1><p class="small muted mt3">Enter your participant code and the PIN you created during activation.</p>' + installCard(false) +
       (S.bioAvailable && S.bioSaved ? '<div class="panel mt6" style="border:1px solid var(--line)"><p class="small strong">Sign in faster</p>' +
         '<button type="button" class="btn btn-primary mt3" data-act="deviceLogin"' + (b ? ' disabled' : '') + '>' + (b === 'deviceLogin' ? 'Checking device…' : 'Sign in with Face ID / fingerprint') + '</button>' +
         '<p class="small muted mt3" style="text-align:center">Or sign in with your PIN below</p></div>' : '') +
@@ -677,7 +705,7 @@
       '<h1 class="mt4" style="font-size:36px;font-weight:600;line-height:1.15">' + (rs ? 'Reset your PIN.' : 'Create your private PIN.') + '</h1>' +
       '<p class="mt5" style="color:#e4e2f2;line-height:1.75">' + (rs ? 'Use your participant code and the PIN reset code we emailed you.' : 'Use the participant code and one-time activation code provided by FCCP.') + ' Your PIN is private—FCCP staff cannot see it.</p></div>' +
       '<div class="split-right"><p class="small strong green">' + (rs ? 'Forgot PIN' : 'First-time access') + '</p><h2 class="mt2" style="font-size:24px;font-weight:600">' + (rs ? 'Set a new PIN' : 'Activate your account') + '</h2>' +
-      (rs && S.notice ? '<p class="info-note">' + esc(S.notice) + '</p>' : '') +
+      (rs && S.notice ? '<p class="info-note">' + esc(S.notice) + '</p>' : '') + (rs ? '' : installCard(false)) +
       '<form data-form="activate" class="mt4">' +
       '<label class="field">Participant code<input id="code" class="input" data-model="code" value="' + esc(S.code) + '" placeholder="Participant code" autocomplete="username"></label>' +
       '<label class="field">' + (rs ? 'PIN reset code (from your email)' : 'One-time activation code') + '<input id="act" class="input" data-model="activation" value="' + esc(S.activation) + '" inputmode="numeric" maxlength="6" placeholder="Six digits" autocomplete="one-time-code"></label>' +
@@ -927,6 +955,7 @@
     else if (S.bioAvailable) h += '<p class="small muted mt1">Sign in with Face ID or fingerprint instead of your PIN.</p><button class="btn mt3" data-act="enroll"' + (b ? ' disabled' : '') + '>' + (b === 'deviceEnroll' ? 'Setting up…' : 'Turn on Face ID / fingerprint') + '</button>';
     else h += '<p class="small muted mt1">Face ID / fingerprint sign-in isn’t available in this browser.</p>';
     h += alertHtml(S.bioMsg) + '</section>';
+    var ic = installCard(true); if (ic) h += '<section class="section">' + ic + '</section>';
     h += '<section class="section"><h2 class="h3">Help</h2><button class="btn mt3" data-act="guide">How to use this app</button>' +
       '<button class="btn mt3" data-act="logout"' + (b ? ' disabled' : '') + '>Sign out</button></section>';
     return h;
@@ -1146,6 +1175,8 @@
       case 'guideNext': if (S.guide >= GUIDE.length - 1) closeGuide(); else { S.guide++; render(); } break;
       case 'guideBack': if (S.guide > 0) { S.guide--; render(); } break;
       case 'guideSkip': closeGuide(); break;
+      case 'install': doInstall(); break;
+      case 'installLater': sSet('localStorage', 'wexInstallLater', String(Date.now())); render(); break;
     }
   });
 
