@@ -71,7 +71,10 @@
     var shareIcon = '<svg class="share-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M8 7l4-4 4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 11v9h12v-9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     var body;
     if (installEvt) body = '<p class="small mt1">Put FCCP WEX on your home screen so it opens like an app.</p><button type="button" class="btn btn-go mt3" data-act="install">Install the app</button>';
-    else if (IS_IOS) body = '<ol class="install-steps small mt2"><li>Tap the <b>Share</b> button ' + shareIcon + ' at the bottom (or top) of the screen.</li><li>Tap <b>Add to Home Screen</b>, then <b>Add</b>.</li></ol>';
+    else if (IS_IOS) body = '<ol class="install-steps small mt2"><li>Don\u2019t see buttons at the bottom? Tap the web address at the bottom of the screen.</li>' +
+      '<li>Tap the <b>Share</b> button ' + shareIcon + '. (On newer iPhones, tap <b>&#8226;&#8226;&#8226;</b> first, then <b>Share</b>.)</li>' +
+      '<li>Scroll down, tap <b>Add to Home Screen</b>, then <b>Add</b>.</li></ol>' +
+      '<p class="xs mt2">Not there? Open this page in a regular Safari tab, not a Private tab.</p>';
     else body = '<ol class="install-steps small mt2"><li>Tap the browser menu <b>&#8942;</b> (top or bottom corner).</li><li>Tap <b>Install app</b> or <b>Add to Home screen</b>.</li></ol>';
     return '<div class="install-card"><p class="strong">&#128241; Install the app on your phone</p>' + body +
       (always ? '' : '<button type="button" class="link mt3" data-act="installLater">Not now</button>') + '</div>';
