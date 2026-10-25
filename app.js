@@ -265,7 +265,7 @@
       if (seq !== statusSeq || token !== S.token) return false;
       if (isExpired(x.resp, x.r)) { expired(); return false; }
       if (!x.resp.ok || x.r.ok === false || !x.r.participant) { S.statusFailed = true; S.error = errText(x.r, 'Unable to load your timekeeping status.'); return false; }
-      var keep = S.status && S.status.balances !== undefined ? { balances: S.status.balances, lowHoursWarning: S.status.lowHoursWarning, mealWarning: S.status.mealWarning } : {};
+      var keep = S.status && S.status.balances !== undefined ? { balances: S.status.balances, lowHoursWarning: S.status.lowHoursWarning, mealWarning: S.status.mealWarning, startDate: S.status.startDate, openPeriods: S.status.openPeriods } : {};
       S.participant = x.r.participant;
       S.status = Object.assign({}, keep, x.r);
       if (x.r.timecard && x.r.timecard.closed === false) S.closedLocal = false;
@@ -288,7 +288,7 @@
       detailsShown = mySeq;
       if (isExpired(x.resp, x.r)) { expired(); return; }
       if (!x.resp.ok || x.r.ok === false) throw new Error();
-      S.status = Object.assign({}, S.status || {}, { balances: x.r.balances, lowHoursWarning: x.r.lowHoursWarning, mealWarning: x.r.mealWarning });
+      S.status = Object.assign({}, S.status || {}, { balances: x.r.balances, lowHoursWarning: x.r.lowHoursWarning, mealWarning: x.r.mealWarning, startDate: x.r.startDate || '', openPeriods: x.r.openPeriods || [] });
       render();
     }).catch(function () {
       if (token !== S.token) return;
@@ -492,9 +492,9 @@
     }).catch(function (e) { m.err = e.message || 'Unable to submit your sick-time request.'; })
       .finally(function () { m.busy = false; render(); });
   }
-  function openMissed() {
-    if (!S.statusLoaded || isClosed()) return;
-    S.modal = { kind: 'missed', step: 'form', f: { workDate: todayKey(), startTime: '', lunchOut: '', lunchIn: '', endTime: '' }, manual: {}, reason: '', details: '', err: '', busy: false };
+  function openMissed(date) {
+    if (!S.statusLoaded || (isClosed() && !date)) return;
+    S.modal = { kind: 'missed', step: 'form', f: { workDate: date || todayKey(), startTime: '', lunchOut: '', lunchIn: '', endTime: '' }, manual: {}, reason: '', details: '', err: '', busy: false };
     render();
   }
   function reviewMissed() {
@@ -751,6 +751,23 @@
   }
   function heldCount() { return liveShifts().filter(function (e) { return String(e.sheetTab || '') === 'PENDING'; }).length; }
 
+  // 2026-10-25: earlier pay periods (from the start date) that FCCP has not finalized yet.
+  function openEarlier() {
+    var cur = (S.status && S.status.payPeriod) || {}, list = (S.status && S.status.openPeriods) || [];
+    return list.filter(function (p) { return p && p.start && (!cur.start || dayNum(p.start) < dayNum(cur.start)); })
+      .sort(function (a, b) { return dayNum(a.start) - dayNum(b.start); });
+  }
+  function firstAddDate(p) { var sd = S.status && S.status.startDate; return sd && dayNum(sd) > dayNum(p.start) ? sd : p.start; }
+  function shiftsIn(p) { return liveShifts().filter(function (e) { return dayNum(e.workDate) >= dayNum(p.start) && dayNum(e.workDate) <= dayNum(p.end); }); }
+  function earlyKey() { return 'wexNoEarlier_' + ((S.participant && S.participant.code) || ''); }
+  function earlyPrompt() {
+    if (!S.shiftsLoaded) return null;
+    var list = openEarlier(); if (!list.length) return null;
+    if (list.some(function (p) { return shiftsIn(p).length; })) return null;
+    if (sGet('localStorage', earlyKey()) === 'yes') return null;
+    return list[0];
+  }
+
   // 4. one plain sentence: what to do next
   function nextStep() {
     var st = S.status || {}, bal = st.balances || {}, tc = st.timecard || {}, closed = isClosed();
@@ -763,6 +780,8 @@
     if (tc.status === 'Reopened') return { tone: 'amber', text: 'FCCP reopened your timecard. Tap here to review and sign it again.', tab: 'timecard' };
     if (unsigned && !closed) return { tone: 'amber', text: 'Your timecard for ' + fmtMDY(unsigned.start) + ' to ' + fmtMDY(unsigned.end) + ' still needs your signature. Tap here.', tab: 'timecard' };
     if (meal === 'LUNCH_DUE_SOON') return { tone: 'amber', text: 'Lunch is due soon. Start a 30-minute lunch before you reach 5 hours.' };
+    var early = earlyPrompt();
+    if (early) return { tone: 'blue', text: 'You started ' + fmtShort(st.startDate || early.start) + '. Did you work any days before you got the app? Tap here to add them.', missed: firstAddDate(early), dismiss: true };
     if (closed) return { tone: 'green', text: 'Your timecard is signed. You’re all set for this pay period.' };
     if (pp.end && todayKey() === pp.end) return { tone: 'amber', text: 'Today is the last day of this pay period. Sign your timecard after your last shift.', tab: 'timecard' };
     if (heldCount()) return { tone: 'blue', text: heldCount() + ' of your shifts ' + (heldCount() === 1 ? 'is' : 'are') + ' waiting to go on your timesheet. FCCP will add ' + (heldCount() === 1 ? 'it' : 'them') + '.', tab: 'hours' };
@@ -775,8 +794,8 @@
   function nextStepHtml() {
     var n = nextStep(); if (!n) return '';
     var icon = { green: '✓', amber: '!', blue: 'i', red: '!' }[n.tone];
-    var attrs = n.edit ? ' data-edit="' + esc(n.edit) + '" role="button" tabindex="0"' : n.tab ? ' data-tab="' + n.tab + '" role="button" tabindex="0"' : '';
-    return '<div class="next tone-' + n.tone + (attrs ? ' tappable' : '') + '"' + attrs + '><span class="next-icon" aria-hidden="true">' + icon + '</span><p><span class="sr-only">Next step: </span>' + esc(n.text) + '</p>' + (attrs ? '<span class="next-go" aria-hidden="true">›</span>' : '') + '</div>';
+    var attrs = n.missed ? ' data-act="missedFrom" data-date="' + esc(n.missed) + '" role="button" tabindex="0"' : n.edit ? ' data-edit="' + esc(n.edit) + '" role="button" tabindex="0"' : n.tab ? ' data-tab="' + n.tab + '" role="button" tabindex="0"' : '';
+    return '<div class="next tone-' + n.tone + (attrs ? ' tappable' : '') + '"' + attrs + '><span class="next-icon" aria-hidden="true">' + icon + '</span><p><span class="sr-only">Next step: </span>' + esc(n.text) + (n.dismiss ? '<br><button type="button" class="link xs mt1" data-act="noEarlier">I didn’t work any days before</button>' : '') + '</p>' + (attrs ? '<span class="next-go" aria-hidden="true">›</span>' : '') + '</div>';
   }
 
   function renderHome() {
@@ -870,20 +889,30 @@
   // 6. My Hours: pay period total, compact list, earlier unfinalized shifts
   function renderHoursTab() {
     var cur = currentPeriod(), closed = isClosed();
-    var h = '<section class="section tone-hours"><p class="eyebrow">This pay period</p><p class="h2 mt1">' + esc(fmtMDY(cur.start)) + ' to ' + esc(fmtMDY(cur.end)) + '</p>';
+    var h = '<section class="section tone-hours"><p class="eyebrow">This pay period (today)</p><p class="h2 mt1">' + esc(fmtMDY(cur.start)) + ' to ' + esc(fmtMDY(cur.end)) + '</p>';
     if (S.shiftsError) return h + alertHtml(S.shiftsError) + '</section>';
     if (!S.shiftsLoaded) return h + '<p class="small muted mt3">Loading your shifts…</p></section>';
     var list = liveShifts().sort(function (a, b) { return dayNum(b.workDate) - dayNum(a.workDate) || to24(b.startTime).localeCompare(to24(a.startTime)); });
     var startNum = dayNum(cur.start);
     var current = list.filter(function (e) { return !startNum || dayNum(e.workDate) >= startNum; });
-    var earlier = list.filter(function (e) { return startNum && dayNum(e.workDate) < startNum; });
+    var opens = openEarlier();
+    var earlier = list.filter(function (e) { return startNum && dayNum(e.workDate) < startNum && !opens.some(function (p) { return dayNum(e.workDate) >= dayNum(p.start) && dayNum(e.workDate) <= dayNum(p.end); }); });
+    var earlyHtml = opens.map(function (p) {
+      var sh = shiftsIn(p).sort(function (a, b) { return dayNum(b.workDate) - dayNum(a.workDate) || to24(b.startTime).localeCompare(to24(a.startTime)); });
+      var tot = sh.reduce(function (n, e) { return n + (e.endTime ? Number(e.hours || 0) : 0); }, 0);
+      return '<section class="section tone-amber-soft"><p class="eyebrow">Earlier pay period · still open</p><p class="h2 mt1">' + esc(fmtMDY(p.start)) + ' to ' + esc(fmtMDY(p.end)) + '</p>' +
+        '<p class="small muted mt1">' + (sh.length ? tot.toFixed(2) + ' hours · ' + sh.length + ' shift' + (sh.length === 1 ? '' : 's') + '. Missing a day? Add it below.' : 'No shifts yet. Did you work any of these days? Add them here.') + '</p>' +
+        '<button class="btn btn-go mt3" data-act="missedFrom" data-date="' + esc(firstAddDate(p)) + '">+ Add a shift for these dates</button>' +
+        sh.map(function (e) { return shiftRow(e, true, false); }).join('') + '</section>';
+    }).join('');
     var total = current.reduce(function (n, e) { return n + (e.endTime ? Number(e.hours || 0) : 0); }, 0);
     var days = {}; current.forEach(function (e) { days[e.workDate] = 1; });
     var meals = current.filter(hasMealPremium).length;
+    if (earlyHtml) h = earlyHtml + h;
     h += '<div class="total-row"><div><p class="big-num">' + total.toFixed(2) + '</p><p class="xs muted">hours worked</p></div><div><p class="big-num">' + Object.keys(days).length + '</p><p class="xs muted">days</p></div>' +
       (meals ? '<div><p class="big-num">+' + meals + '</p><p class="xs muted">meal premium hr</p></div>' : '') + '</div>';
     h += '<button class="btn btn-go mt4" data-act="missed"' + (!S.statusLoaded || closed ? ' disabled' : '') + '>+ Add Missed Shift</button>';
-    h += '<p class="xs muted mt2">Use this if you worked but forgot to clock in or out.</p></section>';
+    h += '<p class="xs muted mt2">Worked a day without clocking in, including days before you had the app? Add it here.</p></section>';
     h += '<section class="section">' + (current.length ? current.map(function (e) { return shiftRow(e, true, false); }).join('') : '<p class="small muted">No shifts yet this pay period.</p>') + '</section>';
     if (earlier.length) {
       h += '<section class="section tone-amber-soft"><h2 class="h3">Earlier pay period – not finalized yet</h2><p class="small muted mt1">FCCP hasn’t finalized these yet, so you can still fix them.</p>' +
@@ -1176,6 +1205,8 @@
       case 'guideBack': if (S.guide > 0) { S.guide--; render(); } break;
       case 'guideSkip': closeGuide(); break;
       case 'install': doInstall(); break;
+      case 'missedFrom': openMissed(el.getAttribute('data-date')); break;
+      case 'noEarlier': sSet('localStorage', earlyKey(), 'yes'); render(); break;
       case 'installLater': sSet('localStorage', 'wexInstallLater', String(Date.now())); render(); break;
     }
   });
