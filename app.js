@@ -31,7 +31,8 @@
 
   // ---------------------------------------------------------------- state
   var S = {
-    view: 'session',          // session | login | activate | home
+    view: 'session',          // session | login | activate | forgot | home
+    reset: false, notice: '',  // 2026-10-25: Forgot PIN (activate view used to set a new PIN)
     busy: '',                 // which action is running
     error: '',                // main error / notice
     bioMsg: '',
@@ -333,8 +334,9 @@
     api({ action: 'activate', participantCode: code, activationCode: S.activation.trim(), pin: S.pin }).then(function (x) {
       if (!x.resp.ok || x.r.ok !== true || !x.r.token || !x.r.participant) { S.error = errText(x.r, 'Unable to activate your account.'); return; }
       sSet('localStorage', CODE_KEY, code);
-      S.activation = ''; S.busy = '';
-      return startSession(x.r.token, x.r.participant).then(function () { maybeShowGuide(true); });
+      var wasReset = S.reset;
+      S.activation = ''; S.busy = ''; S.reset = false; S.notice = '';
+      return startSession(x.r.token, x.r.participant).then(function () { if (wasReset) showToast('Your new PIN is saved.'); else maybeShowGuide(true); });
     }).catch(function (e) { S.error = e.message || 'Unable to activate your account.'; })
       .finally(function () { if (S.busy === 'activate') S.busy = ''; render(); });
   }
@@ -618,6 +620,7 @@
     if (S.view === 'session') html = '<main class="center-screen"><p class="loading-text">Loading your timekeeping account…</p></main>';
     else if (S.view === 'activate') html = renderActivate();
     else if (S.view === 'login') html = renderLogin();
+    else if (S.view === 'forgot') html = renderForgot();
     else html = renderHome();
     var openKeys = {}; Array.prototype.forEach.call(app.querySelectorAll('details[open][data-key]'), function (d) { openKeys[d.getAttribute('data-key')] = 1; });
     app.innerHTML = banner() + html + renderModal();
@@ -637,25 +640,52 @@
       '<label class="field">4-digit PIN<input id="pin" class="input pin" data-model="pin" value="' + esc(S.pin) + '" inputmode="numeric" maxlength="4" type="password" autocomplete="current-password" enterkeyhint="go"></label>' +
       alertHtml(S.error || S.bioMsg) +
       '<button type="submit" class="btn btn-primary mt6"' + (b ? ' disabled' : '') + '>' + (b === 'login' ? 'Signing in…' : 'Sign in') + '</button>' +
-      '<button type="button" class="link mt4" style="display:block;width:100%" data-act="toActivate"' + (b ? ' disabled' : '') + '>First time? Create your account</button>' +
+      '<button type="button" class="link mt4" style="display:block;width:100%" data-act="toForgot"' + (b ? ' disabled' : '') + '>Forgot PIN?</button>' +
+      '<button type="button" class="link mt2" style="display:block;width:100%" data-act="toActivate"' + (b ? ' disabled' : '') + '>First time? Create your account</button>' +
       '</form></main>';
   }
-  function renderActivate() {
+  // 2026-10-25: Forgot PIN. The reset code is emailed; the participant then sets a new PIN on the activate screen.
+  function renderForgot() {
     var b = S.busy;
+    return '<main class="center-screen"><form class="card-xl" data-form="forgot">' + brand('') +
+      '<h1 class="title mt6">Forgot your PIN?</h1><p class="small muted mt3">Enter your participant code. We\u2019ll email you a 6-digit PIN reset code. Your old PIN keeps working until you set a new one.</p>' +
+      '<label class="field mt8">Participant code<input id="code" class="input" data-model="code" value="' + esc(S.code) + '" autocomplete="username" enterkeyhint="go"></label>' +
+      alertHtml(S.error) +
+      '<button type="submit" class="btn btn-primary mt6"' + (b ? ' disabled' : '') + '>' + (b === 'forgot' ? 'Sending…' : 'Email me a reset code') + '</button>' +
+      '<button type="button" class="link mt4" style="display:block;width:100%" data-act="toReset"' + (b ? ' disabled' : '') + '>I have a code</button>' +
+      '<button type="button" class="link mt2" style="display:block;width:100%" data-act="toLogin"' + (b ? ' disabled' : '') + '>Back to sign in</button>' +
+      '<p class="xs muted mt4" style="text-align:center">No email on file? Ask FCCP staff to reset your PIN.</p>' +
+      '</form></main>';
+  }
+  function doForgot() {
+    S.error = '';
+    var code = S.code.trim();
+    if (!code) { S.error = 'Enter your participant code.'; return render(); }
+    S.busy = 'forgot'; render();
+    api({ action: 'forgotPin', participantCode: code }).then(function (x) {
+      if (!x.resp.ok || x.r.ok !== true) { S.error = errText(x.r, 'Unable to send a reset code. Please ask FCCP staff.'); return; }
+      S.notice = x.r.message || 'Check your email for a PIN reset code.';
+      S.reset = true; S.activation = ''; S.pin = ''; S.pin2 = ''; S.view = 'activate';
+    }).catch(function (e) { S.error = e.message || 'Unable to send a reset code. Please ask FCCP staff.'; })
+      .finally(function () { if (S.busy === 'forgot') S.busy = ''; render(); });
+  }
+  function renderActivate() {
+    var b = S.busy, rs = S.reset;
     return '<main class="center-screen"><section class="split"><div class="split-left">' +
       '<div style="display:flex;align-items:center;gap:12px;margin-bottom:56px"><div class="brand-mark big">' + logoHtml() + '</div><div><p class="small strong" style="letter-spacing:.18em">FCCP</p><p class="xs" style="color:#d4d1ea">WEX TIMEKEEPING</p></div></div>' +
       '<p class="small strong" style="text-transform:uppercase;letter-spacing:.16em;color:var(--brand-green)">Participant setup</p>' +
-      '<h1 class="mt4" style="font-size:36px;font-weight:600;line-height:1.15">Create your private PIN.</h1>' +
-      '<p class="mt5" style="color:#e4e2f2;line-height:1.75">Use the participant code and one-time activation code provided by FCCP. Your PIN is private—FCCP staff cannot see it.</p></div>' +
-      '<div class="split-right"><p class="small strong green">First-time access</p><h2 class="mt2" style="font-size:24px;font-weight:600">Activate your account</h2>' +
+      '<h1 class="mt4" style="font-size:36px;font-weight:600;line-height:1.15">' + (rs ? 'Reset your PIN.' : 'Create your private PIN.') + '</h1>' +
+      '<p class="mt5" style="color:#e4e2f2;line-height:1.75">' + (rs ? 'Use your participant code and the PIN reset code we emailed you.' : 'Use the participant code and one-time activation code provided by FCCP.') + ' Your PIN is private—FCCP staff cannot see it.</p></div>' +
+      '<div class="split-right"><p class="small strong green">' + (rs ? 'Forgot PIN' : 'First-time access') + '</p><h2 class="mt2" style="font-size:24px;font-weight:600">' + (rs ? 'Set a new PIN' : 'Activate your account') + '</h2>' +
+      (rs && S.notice ? '<p class="info-note">' + esc(S.notice) + '</p>' : '') +
       '<form data-form="activate" class="mt4">' +
       '<label class="field">Participant code<input id="code" class="input" data-model="code" value="' + esc(S.code) + '" placeholder="Participant code" autocomplete="username"></label>' +
-      '<label class="field">One-time activation code<input id="act" class="input" data-model="activation" value="' + esc(S.activation) + '" inputmode="numeric" maxlength="6" placeholder="Six digits" autocomplete="one-time-code"></label>' +
-      '<label class="field">Create 4-digit PIN<input id="pin" class="input pin" data-model="pin" value="' + esc(S.pin) + '" inputmode="numeric" maxlength="4" type="password" placeholder="••••" autocomplete="new-password"></label>' +
+      '<label class="field">' + (rs ? 'PIN reset code (from your email)' : 'One-time activation code') + '<input id="act" class="input" data-model="activation" value="' + esc(S.activation) + '" inputmode="numeric" maxlength="6" placeholder="Six digits" autocomplete="one-time-code"></label>' +
+      '<label class="field">' + (rs ? 'New 4-digit PIN' : 'Create 4-digit PIN') + '<input id="pin" class="input pin" data-model="pin" value="' + esc(S.pin) + '" inputmode="numeric" maxlength="4" type="password" placeholder="••••" autocomplete="new-password"></label>' +
       '<label class="field">Confirm PIN<input id="pin2" class="input pin" data-model="pin2" value="' + esc(S.pin2) + '" inputmode="numeric" maxlength="4" type="password" placeholder="••••" autocomplete="new-password"></label>' +
       alertHtml(S.error) +
-      '<button type="submit" class="btn btn-primary mt5"' + (b ? ' disabled' : '') + '>' + (b === 'activate' ? 'Activating…' : 'Create PIN and continue') + '</button>' +
-      '<button type="button" class="link mt4" style="display:block;width:100%" data-act="toLogin"' + (b ? ' disabled' : '') + '>Already activated? Sign in</button>' +
+      '<button type="submit" class="btn btn-primary mt5"' + (b ? ' disabled' : '') + '>' + (b === 'activate' ? (rs ? 'Saving…' : 'Activating…') : (rs ? 'Save new PIN and continue' : 'Create PIN and continue')) + '</button>' +
+      '<button type="button" class="link mt4" style="display:block;width:100%" data-act="toLogin"' + (b ? ' disabled' : '') + '>' + (rs ? 'Back to sign in' : 'Already activated? Sign in') + '</button>' +
       '</form></div></section></main>';
   }
 
@@ -1068,7 +1098,7 @@
     e.preventDefault();
     if (S.busy) return;
     var f = e.target.getAttribute('data-form');
-    if (f === 'login') doLogin(); else if (f === 'activate') doActivate();
+    if (f === 'login') doLogin(); else if (f === 'activate') doActivate(); else if (f === 'forgot') doForgot();
   });
   app.addEventListener('keydown', function (e) {
     if (e.key !== 'Enter') return;
@@ -1087,8 +1117,10 @@
     if (el.hasAttribute('data-edit')) return openEdit(el.getAttribute('data-edit'));
     var a = el.getAttribute('data-act'), m = S.modal;
     switch (a) {
-      case 'toActivate': S.error = ''; S.pin = ''; S.view = 'activate'; render(); break;
-      case 'toLogin': S.error = ''; S.pin = ''; S.pin2 = ''; S.view = 'login'; refreshBio(S.code.trim()).then(render); render(); break;
+      case 'toActivate': S.error = ''; S.pin = ''; S.reset = false; S.notice = ''; S.view = 'activate'; render(); break;
+      case 'toForgot': S.error = ''; S.pin = ''; S.view = 'forgot'; render(); break;
+      case 'toReset': S.error = ''; S.pin = ''; S.pin2 = ''; S.activation = ''; S.reset = true; S.notice = ''; S.view = 'activate'; render(); break;
+      case 'toLogin': S.error = ''; S.pin = ''; S.pin2 = ''; S.reset = false; S.notice = ''; S.view = 'login'; refreshBio(S.code.trim()).then(render); render(); break;
       case 'otherParticipant': S.code = ''; S.error = ''; S.bioMsg = ''; S.bioSaved = null; render(); var c = document.getElementById('code'); if (c) c.focus(); break;
       case 'deviceLogin': doDeviceLogin(); break;
       case 'logout': doLogout(); break;
