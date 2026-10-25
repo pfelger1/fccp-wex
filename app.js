@@ -47,8 +47,14 @@
     sick: [], sickError: '',
     past: [], pastLoaded: false, pastError: '',
     bioAvailable: false, bioSaved: null, offerBio: false,
-    modal: null               // { kind: 'sick'|'missed'|'edit'|'submit', ... }
+    modal: null,              // { kind: 'sick'|'missed'|'edit'|'submit', ... }
+    tab: sGet('sessionStorage', 'wexTab') || 'clock',
+    toast: '', guide: null
   };
+  var toastTimer = null;
+  function showToast(t) { S.toast = t; render(); clearTimeout(toastTimer); toastTimer = setTimeout(function () { S.toast = ''; render(); }, 3500); }
+  function maybeShowGuide(force) { if (force || sGet('localStorage', 'wexGuideSeen') !== 'yes') { S.guide = 0; render(); } }
+  function closeGuide() { S.guide = null; sSet('localStorage', 'wexGuideSeen', 'yes'); render(); }
   var statusSeq = 0;          // fix 3: only the newest status request may update the screen
   var pollTimer = null;
 
@@ -200,7 +206,7 @@
     S.token = ''; S.participant = null; S.status = null; S.statusLoaded = false; S.statusFailed = false; S.closedLocal = false;
     S.shifts = []; S.shiftsPeriod = null; S.shiftsLoaded = false; S.shiftsError = '';
     S.sick = []; S.sickError = ''; S.past = []; S.pastLoaded = false; S.pastError = '';
-    S.offerBio = false; S.bioMsg = ''; S.modal = null; S.pin = ''; S.pin2 = '';
+    S.offerBio = false; S.bioMsg = ''; S.modal = null; S.pin = ''; S.pin2 = ''; S.tab = 'clock'; S.guide = null; sDel('sessionStorage', 'wexTab');
     S.view = view || 'login'; S.error = msg || '';
     stopPolling();
     if (S.view === 'login') refreshBio(S.code.trim()).then(render);
@@ -291,6 +297,11 @@
     pollTimer = setInterval(function () { if (document.visibilityState === 'visible' && !S.busy && !S.modal) loadStatus(false); }, 60000);
   }
   function stopPolling() { if (pollTimer) clearInterval(pollTimer); pollTimer = null; }
+  // keep "2 hr 14 min so far" current without a server call
+  setInterval(function () {
+    var a = document.activeElement;
+    if (S.view === 'home' && S.tab === 'clock' && !S.modal && S.guide == null && !S.busy && !(a && /INPUT|SELECT|TEXTAREA/.test(a.tagName))) render();
+  }, 30000);
   window.addEventListener('focus', function () { if (S.view === 'home' && S.token && !S.busy && !S.modal) loadStatus(false); });
   document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible' && S.view === 'home' && S.token && !S.busy && !S.modal) loadStatus(false); });
 
@@ -307,6 +318,7 @@
       S.busy = '';
       return startSession(x.r.token, x.r.participant).then(function (ok) {
         if (!ok) return;
+        maybeShowGuide(false);
         return bioSupported().then(function (sup) { if (sup && !savedBio(code)) { S.offerBio = true; render(); } });
       });
     }).catch(function (e) { S.error = e.message || 'Unable to sign in.'; })
@@ -322,7 +334,7 @@
       if (!x.resp.ok || x.r.ok !== true || !x.r.token || !x.r.participant) { S.error = errText(x.r, 'Unable to activate your account.'); return; }
       sSet('localStorage', CODE_KEY, code);
       S.activation = ''; S.busy = '';
-      return startSession(x.r.token, x.r.participant);
+      return startSession(x.r.token, x.r.participant).then(function () { maybeShowGuide(true); });
     }).catch(function (e) { S.error = e.message || 'Unable to activate your account.'; })
       .finally(function () { if (S.busy === 'activate') S.busy = ''; render(); });
   }
@@ -420,9 +432,11 @@
       if (S.status) {
         S.status.state = x.r.status === 'Active' ? 'Off Clock' : x.r.status;
         S.status.allowedActions = x.r.allowedActions || S.status.allowedActions;
+        S.status.sinceTime = x.r.time || '';
       }
       S.busy = '';
-      render();
+      var said = { CLOCK_IN: 'Clocked in', START_LUNCH: 'Lunch started', END_LUNCH: 'Back from lunch', CLOCK_OUT: 'Clocked out' }[action];
+      showToast('\u2713 ' + said + (x.r.time ? ' at ' + fmtTime(x.r.time) : '') + ' \u2013 saved');
       return refreshAll();
     }).catch(function (e) { S.error = e.message || 'The punch was not recorded. Your screen was not changed.'; })
       .finally(function () { if (S.busy === 'punch') S.busy = ''; render(); });
@@ -605,7 +619,9 @@
     else if (S.view === 'activate') html = renderActivate();
     else if (S.view === 'login') html = renderLogin();
     else html = renderHome();
+    var openKeys = {}; Array.prototype.forEach.call(app.querySelectorAll('details[open][data-key]'), function (d) { openKeys[d.getAttribute('data-key')] = 1; });
     app.innerHTML = banner() + html + renderModal();
+    Array.prototype.forEach.call(app.querySelectorAll('details[data-key]'), function (d) { if (openKeys[d.getAttribute('data-key')]) d.open = true; });
     if (focusId) { var el = document.getElementById(focusId); if (el && el.tagName !== 'BUTTON') { el.focus(); if (el.setSelectionRange && el.type !== 'date') try { el.setSelectionRange(el.value.length, el.value.length); } catch (e) {} } }
     setupSignature();
   }
@@ -643,135 +659,262 @@
       '</form></div></section></main>';
   }
 
-  function renderHome() {
-    var p = S.participant || {}, st = S.status || {}, bal = st.balances || {}, b = S.busy, closed = isClosed(), acts = allowed();
-    var primary = ['CLOCK_IN', 'START_LUNCH', 'END_LUNCH', 'CLOCK_OUT'].filter(function (a) { return acts.indexOf(a) >= 0; })[0];
-    var label = { CLOCK_IN: 'Clock In', START_LUNCH: 'Start Lunch', END_LUNCH: 'End Lunch', CLOCK_OUT: 'Clock Out' };
+  // ================================================================ home screen (2026-10-25 redesign)
+  // Tabs: Clock | My Hours | Timecard | More. Colors carry meaning everywhere:
+  //   green = done / good, amber = you need to do something, blue = information, red = problem.
+  var ICON = {
+    clock: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+    hours: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4M16 3v4M4 10h16"/></svg>',
+    card: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 14l2 2 4-4"/></svg>',
+    more: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>'
+  };
+  var TABS = [['clock', 'Clock'], ['hours', 'My Hours'], ['timecard', 'Timecard'], ['more', 'More']];
+  function nowMinutes() { var d = new Date(); return d.getHours() * 60 + d.getMinutes(); }
+  function elapsedText(fromHHmm) {
+    var t = to24(fromHHmm); if (!t) return '';
+    var m = nowMinutes() - mins(t); if (m < 0) m += 1440;
+    return m < 60 ? m + ' min' : Math.floor(m / 60) + ' hr ' + (m % 60) + ' min';
+  }
+  function openShiftToday() {
+    var t = (S.status && S.status.today) || [];
+    for (var i = t.length - 1; i >= 0; i--) if (/^(open|lunch)$/i.test(String(t[i].status || ''))) return t[i];
+    return null;
+  }
+  function liveShifts() { return S.shifts.filter(function (e) { return !isSuperseded(e); }); }
+  function currentPeriod() { return S.shiftsPeriod || (S.status && S.status.payPeriod) || {}; }
+  function forgotClockOut() {
+    var today = todayKey();
+    return liveShifts().filter(function (e) { return /^(open|lunch)$/i.test(String(e.status || '')) && String(e.workDate) < today; })
+      .sort(function (a, b) { return dayNum(a.workDate) - dayNum(b.workDate); })[0] || null;
+  }
+  function unsignedPast() {
+    return (S.past || []).filter(function (t) { return (t.status === 'Not submitted' || t.status === 'Reopened') && t.shiftCount > 0; })
+      .sort(function (a, b) { return dayNum(b.start) - dayNum(a.start); })[0] || null;
+  }
+  function heldCount() { return liveShifts().filter(function (e) { return String(e.sheetTab || '') === 'PENDING'; }).length; }
+
+  // 4. one plain sentence: what to do next
+  function nextStep() {
+    var st = S.status || {}, bal = st.balances || {}, tc = st.timecard || {}, closed = isClosed();
     var meal = typeof st.mealWarning === 'string' ? st.mealWarning.toUpperCase() : String((st.mealWarning && (st.mealWarning.code || st.mealWarning.type)) || '').toUpperCase();
-    var h = '';
-    h += '<header class="topbar"><div class="topbar-inner">' + brand('Participant timekeeping') +
+    var forgot = forgotClockOut(), unsigned = unsignedPast(), pp = st.payPeriod || {};
+    if (!S.statusLoaded) return null;
+    if (bal.hoursRemaining != null && Number(bal.hoursRemaining) === 0) return { tone: 'red', text: 'You have no WEX hours left. Talk to FCCP staff before you work again.' };
+    if (meal === 'TAKE_LUNCH_NOW') return { tone: 'red', text: 'Take your lunch now. Tap Start Lunch.' };
+    if (forgot) return { tone: 'amber', text: 'You forgot to clock out on ' + fmtShort(forgot.workDate) + '. Tap here to add your clock-out time.', edit: forgot.punchId };
+    if (tc.status === 'Reopened') return { tone: 'amber', text: 'FCCP reopened your timecard. Tap here to review and sign it again.', tab: 'timecard' };
+    if (unsigned && !closed) return { tone: 'amber', text: 'Your timecard for ' + fmtMDY(unsigned.start) + ' to ' + fmtMDY(unsigned.end) + ' still needs your signature. Tap here.', tab: 'timecard' };
+    if (meal === 'LUNCH_DUE_SOON') return { tone: 'amber', text: 'Lunch is due soon. Start a 30-minute lunch before you reach 5 hours.' };
+    if (closed) return { tone: 'green', text: 'Your timecard is signed. You’re all set for this pay period.' };
+    if (pp.end && todayKey() === pp.end) return { tone: 'amber', text: 'Today is the last day of this pay period. Sign your timecard after your last shift.', tab: 'timecard' };
+    if (heldCount()) return { tone: 'blue', text: heldCount() + ' of your shifts ' + (heldCount() === 1 ? 'is' : 'are') + ' waiting to go on your timesheet. FCCP will add ' + (heldCount() === 1 ? 'it' : 'them') + '.', tab: 'hours' };
+    if (bal.hoursRemaining != null && Number(bal.hoursRemaining) < 8) return { tone: 'amber', text: 'You have only ' + hrs(bal.hoursRemaining) + ' WEX hours left.' };
+    var state = String(st.state || '').toUpperCase();
+    if (state === 'OPEN') return { tone: 'green', text: 'You’re clocked in. Working over 5 hours? Take a 30-minute lunch.' };
+    if (state === 'LUNCH') return { tone: 'blue', text: 'Enjoy your lunch. Tap End Lunch when you’re back.' };
+    return { tone: 'green', text: 'All set ✓' };
+  }
+  function nextStepHtml() {
+    var n = nextStep(); if (!n) return '';
+    var icon = { green: '✓', amber: '!', blue: 'i', red: '!' }[n.tone];
+    var attrs = n.edit ? ' data-edit="' + esc(n.edit) + '" role="button" tabindex="0"' : n.tab ? ' data-tab="' + n.tab + '" role="button" tabindex="0"' : '';
+    return '<div class="next tone-' + n.tone + (attrs ? ' tappable' : '') + '"' + attrs + '><span class="next-icon" aria-hidden="true">' + icon + '</span><p><span class="sr-only">Next step: </span>' + esc(n.text) + '</p>' + (attrs ? '<span class="next-go" aria-hidden="true">›</span>' : '') + '</div>';
+  }
+
+  function renderHome() {
+    var p = S.participant || {}, b = S.busy;
+    var tab = S.tab || 'clock';
+    var h = '<header class="topbar"><div class="topbar-inner">' + brand(esc(p.name || 'Participant timekeeping')) +
       '<button class="link" data-act="logout"' + (b ? ' disabled' : '') + '>' + (b === 'logout' ? 'Signing out…' : 'Sign out') + '</button></div></header>';
-    h += '<div class="wrap">';
-    if (S.offerBio) {
-      h += '<section class="section"><p class="h2">Sign in faster next time</p><p class="small muted mt2">Use your device’s secure unlock to sign in without typing your PIN.</p>' +
-        '<button class="btn btn-primary mt4" data-act="enroll"' + (b ? ' disabled' : '') + '>' + (b === 'deviceEnroll' ? 'Setting up…' : 'Use Face ID / fingerprint') + '</button>' +
-        '<button class="link mt3" style="display:block;width:100%" data-act="notNow"' + (b ? ' disabled' : '') + '>Not now</button>' + alertHtml(S.bioMsg) + '</section>';
-    } else if (S.bioMsg) h += '<div style="margin-bottom:20px">' + alertHtml(S.bioMsg) + '</div>';
-
-    // status card
-    h += '<section class="section"><div class="row-between"><div style="min-width:0"><p class="eyebrow">' + esc(p.program) + '</p><h1 class="title mt1">' + esc(p.name) + '</h1></div>' +
-      '<span class="chip">' + esc(stateLabel(st.state)) + '</span></div>';
-    h += '<div class="panel info-grid two mt6"><div><p class="green">Today</p><p class="strong mt1">' + esc(fmtToday()) + '</p></div>' +
-      '<div><p class="green">Pay period</p><p class="strong mt1">' + esc(fmtMDY(st.payPeriod && st.payPeriod.start)) + ' to ' + esc(fmtMDY(st.payPeriod && st.payPeriod.end)) + '</p></div></div>';
-    h += '<div class="tiles"><div class="tile"><p class="tile-label">WEX Hours Remaining</p><p class="big-num">' + (hrs(bal.hoursRemaining) || '—') + ' hours</p><p class="xs muted mt1">Program limit: ' + (hrs(bal.hourLimit) || '—') + ' hours</p></div>' +
-      '<div class="tile"><p class="tile-label">Sick Time Available</p><p class="big-num">' + (hrs(bal.sickAvailable) || '—') + ' hours</p>' +
-      '<button class="btn btn-inline mt3" data-act="sick"' + (!S.statusLoaded || closed || !(Number(bal.sickAvailable) > 0) ? ' disabled' : '') + '>Request Sick Time</button></div></div>';
-    if (st.lowHoursWarning) h += '<p role="status" class="alert"><b>⚠ WEX hours are running low</b><br>Only ' + (hrs(bal.hoursRemaining) || '0.00') + ' hours remain in your program. Regular time, approved sick time, and meal-premium hours all count toward this limit.</p>';
-    if (bal.hoursRemaining != null && Number(bal.hoursRemaining) === 0) h += '<p role="status" class="alert"><b>⚠ No WEX hours remaining</b><br>Contact FCCP staff before working or requesting additional paid time.</p>';
-    if (meal === 'TAKE_LUNCH_NOW') h += '<p role="status" class="alert"><b>⚠ Take lunch now</b><br>You are approaching your meal-period deadline.</p>';
-    if (meal === 'MEAL_REVIEW') h += '<p role="status" class="alert"><b>⚠ Meal period needs review</b><br>FCCP will review your submitted timecard and reopen it if a correction is needed.</p>';
-    if (meal === 'LUNCH_DUE_SOON') h += '<p role="status" class="alert">⚠ Your meal period is coming up soon. Please plan to take lunch.</p>';
-    h += alertHtml(S.error);
-    if (S.statusFailed) h += '<button class="btn btn-inline mt3" data-act="retry"' + (b ? ' disabled' : '') + '>' + (b === 'status' ? 'Retrying…' : 'Retry loading status') + '</button>';
-    h += '<div class="mt5">';
-    if (!S.statusLoaded) h += '<p class="panel small muted" style="text-align:center;background:#fff;border:1px solid var(--line)">' + (S.statusFailed ? 'Punch controls are unavailable until your status loads.' : 'Loading punch controls…') + '</p>';
-    else if (closed) h += '<p class="panel small muted" style="text-align:center;background:#fff;border:1px solid var(--line)">Punches are closed for this pay period.</p>';
-    else if (primary) {
-      h += '<button class="btn btn-primary btn-big" data-punch="' + primary + '"' + (b ? ' disabled' : '') + '>' + (b === 'punch' ? 'Saving…' : label[primary]) + '</button>';
-      if (primary === 'START_LUNCH' && acts.indexOf('CLOCK_OUT') >= 0) h += '<button class="btn mt3" data-punch="CLOCK_OUT"' + (b ? ' disabled' : '') + '>Clock Out</button>';
-    } else h += '<p class="panel small muted" style="text-align:center;background:#fff;border:1px solid var(--line)">No action is available right now.</p>';
-    h += '</div></section>';
-
-    // today's punches
-    var today = st.today || [];
-    h += '<section class="section"><div class="row-between" style="align-items:center"><h2 class="h2">Today’s punches</h2><span class="small green">' + today.length + ' ' + (today.length === 1 ? 'shift' : 'shifts') + '</span></div>';
-    if (!today.length) h += '<p class="small muted mt5">No punches have been returned for today.</p>';
-    today.forEach(function (e, i) {
-      h += '<article class="shift"><p class="small strong green">Shift ' + (i + 1) + (e.type ? ' · ' + esc(typeLabel(e.type)) : '') + '</p>' + timesDl(e, true) + mealChip(e) + '</article>';
-    });
-    h += '</section>';
-
-    // shifts grouped by pay period (fix 1)
-    h += renderShifts(closed);
-
-    // past timecards
-    h += '<section class="section" aria-labelledby="past-h"><h2 id="past-h" class="h2">Past timecards</h2><p class="small muted mt1">Check whether an earlier pay period was submitted. Select a period to see its saved shifts.</p>';
-    if (!S.pastLoaded) h += '<p class="small muted mt4">Checking earlier pay periods…</p>';
-    else if (S.pastError) h += alertHtml(S.pastError);
-    else if (!S.past.length) h += '<p class="small muted mt4">No earlier timecards with saved shifts or submissions.</p>';
-    else S.past.forEach(function (t) {
-      var sub = ['Submitted', 'Needs Re-signature', 'Manager Finalized'].indexOf(t.status) >= 0, re = t.status === 'Reopened';
-      var txt = t.status === 'Manager Finalized' ? 'Finalized by FCCP' : sub ? 'Submitted' : re ? 'Reopened · submit again' : 'Not submitted';
-      var cls = sub ? '' : re ? ' chip-warn' : ' chip-red';
-      h += '<details class="past"><summary><div class="row-between" style="align-items:center"><div><p class="strong">' + esc(fmtMDY(t.start)) + ' to ' + esc(fmtMDY(t.end)) + '</p>' +
-        '<p class="small muted mt1">' + t.shiftCount + ' ' + (t.shiftCount === 1 ? 'shift' : 'shifts') + ' · ' + (hrs(t.totalHours) || '0.00') + ' hours</p></div><span class="chip chip-sm' + cls + '">' + txt + '</span></div></summary>' +
-        (t.submittedAt ? '<p class="small muted mt3">Submitted ' + esc(fmtStamp(t.submittedAt)) + '</p>' : '');
-      if ((t.shifts || []).length) t.shifts.forEach(function (s) {
-        h += '<div class="past-shift"><p class="strong">' + esc(fmtShort(s.workDate)) + '</p><p class="small mt1">' + fmtTime(s.startTime) + ' – ' + fmtTime(s.endTime) + '</p><p class="small muted mt1">' + esc(s.type || 'Regular') + ' · ' + (hrs(s.hours != null ? s.hours : s.workedHours) || '—') + ' hours</p></div>';
-      });
-      else h += '<p class="small muted mt3">No active shifts are saved for this period.</p>';
-      h += '</details>';
-    });
-    h += '</section>';
-
-    // submit timecard
-    h += '<section class="section">';
-    var tc = st.timecard || {};
-    if (tc.status === 'Reopened') h += '<div role="status" class="notice-gold" style="margin:0 0 16px"><p class="strong">FCCP reopened your timecard</p><p class="mt1">Review the requested changes, update your timecard, and submit it again.</p>' + (tc.reopenReason ? '<p class="mt2"><b>Reason:</b> ' + esc(tc.reopenReason) + '</p>' : '') + '</div>';
-    if (closed) h += '<div role="status" class="closed-box"><p class="h2" style="font-weight:700">Timecard Submitted - Closed</p>' + (tc.submittedAt ? '<p class="small mt1">Submitted ' + esc(fmtStamp(tc.submittedAt)) + '</p>' : '') + '<p class="small mt2">This timecard has been submitted and is closed for this pay period. Contact FCCP staff if a correction is needed.</p></div>';
-    else h += '<h2 class="h2">Finished for this pay period?</h2><button class="btn btn-primary mt4" style="min-height:56px;font-size:18px" data-act="submit"' + (!S.statusLoaded ? ' disabled' : '') + '>Submit Timecard</button><p class="xs muted mt2" style="text-align:center">Submitting will close your timecard for this pay period.</p>';
-    h += '</section>';
-
-    if (S.bioSaved) h += '<section class="section"><h2 class="h3">Device settings</h2><p class="small muted mt2">Face ID / fingerprint sign-in is enabled on this device.</p><button class="link mt3" data-act="revoke"' + (b ? ' disabled' : '') + '>' + (b === 'deviceRevoke' ? 'Removing…' : 'Remove Face ID / fingerprint') + '</button></section>';
+    h += '<div class="wrap with-tabs">' + nextStepHtml();
+    if (false) {
+      h += '<section class="section tone-blue-soft"><p class="h3">Sign in faster next time</p><p class="small muted mt1">Use your phone’s Face ID or fingerprint instead of typing your PIN.</p>' +
+        '<div class="btn-row"><button class="btn" data-act="notNow"' + (b ? ' disabled' : '') + '>Not now</button><button class="btn btn-primary" data-act="enroll"' + (b ? ' disabled' : '') + '>' + (b === 'deviceEnroll' ? 'Setting up…' : 'Turn it on') + '</button></div>' + alertHtml(S.bioMsg) + '</section>';
+    } else if (S.bioMsg && tab !== 'more') h += alertHtml(S.bioMsg);
+    if (tab === 'clock') h += renderClockTab();
+    else if (tab === 'hours') h += renderHoursTab();
+    else if (tab === 'timecard') h += renderTimecardTab();
+    else h += renderMoreTab();
     h += '</div>';
+    h += '<nav class="tabbar" aria-label="Sections">' + TABS.map(function (t) {
+      var icon = ICON[t[0] === 'timecard' ? 'card' : t[0]];
+      return '<button class="tab tab-' + t[0] + (tab === t[0] ? ' active' : '') + '" data-tab="' + t[0] + '"' + (tab === t[0] ? ' aria-current="page"' : '') + '>' + icon + '<span>' + t[1] + '</span>' + (t[0] === 'timecard' && tabBadge() ? '<i class="badge" aria-label="needs attention"></i>' : '') + '</button>';
+    }).join('') + '</nav>';
+    if (S.toast) h += '<div class="toast" role="status">' + esc(S.toast) + '</div>';
+    if (S.guide != null) h += renderGuide();
     return '<main>' + h + '</main>';
   }
-  function timesDl(e, skipBlankHours) {
-    var h = '<dl class="times"><div><dt>Clock In</dt><dd>' + fmtTime(e.startTime) + '</dd></div><div><dt>Lunch Out</dt><dd>' + fmtTime(e.lunchOut) + '</dd></div>' +
-      '<div><dt>Lunch In</dt><dd>' + fmtTime(e.lunchIn) + '</dd></div><div><dt>Clock Out</dt><dd>' + fmtTime(e.endTime) + '</dd></div>';
-    if (!(skipBlankHours && (e.hours == null || e.hours === ''))) h += '<div><dt>Hours</dt><dd>' + (hrs(e.hours) || '—') + '</dd></div>';
-    if (e.status) h += '<div><dt>Status</dt><dd>' + esc(e.status === 'Active' ? 'Complete' : e.status === 'Open' ? 'Not clocked out' : e.status) + '</dd></div>';
-    return h + '</dl>';
-  }
-  function renderShifts(closed) {
-    var cur = S.shiftsPeriod || (S.status && S.status.payPeriod) || {};
-    var h = '<section class="section"><div><h2 class="h2">This Pay Period</h2><p class="small green mt1">' + esc(fmtMDY(cur.start)) + ' to ' + esc(fmtMDY(cur.end)) + '</p></div>' +
-      '<button class="btn btn-green btn-inline mt4" data-act="missed"' + (!S.statusLoaded || closed ? ' disabled' : '') + '>Add Missed Shift</button>';
-    if (S.shiftsError) h += alertHtml(S.shiftsError);
-    else if (!S.shiftsLoaded) h += '<p class="small muted mt4">Loading shifts...</p>';
-    else {
-      var list = S.shifts.filter(function (e) { return !isSuperseded(e); }).sort(function (a, b) { return dayNum(b.workDate) - dayNum(a.workDate) || to24(b.startTime).localeCompare(to24(a.startTime)); });
-      var startNum = dayNum(cur.start);
-      var current = list.filter(function (e) { return !startNum || dayNum(e.workDate) >= startNum; });
-      var earlier = list.filter(function (e) { return startNum && dayNum(e.workDate) < startNum; });
-      if (!current.length) h += '<p class="small muted mt4">No shifts yet this pay period.</p>';
-      current.forEach(function (e) { h += shiftCard(e, closed); });
-      if (earlier.length) {
-        h += '<div class="group-head"><h3 class="h3">Earlier pay period – not finalized yet</h3><p class="small muted mt1">FCCP has not finalized these shifts yet, so you can still correct them.</p></div>';
-        earlier.forEach(function (e) { h += shiftCard(e, closed); });
-      }
+  function tabBadge() { var tc = (S.status && S.status.timecard) || {}; return !isClosed() && (tc.status === 'Reopened' || !!unsignedPast()); }
+
+  // 1. the status card with the one big button
+  function renderClockTab() {
+    var st = S.status || {}, bal = st.balances || {}, b = S.busy, closed = isClosed(), acts = allowed();
+    var state = String(st.state || '').toUpperCase(), open = openShiftToday();
+    var h = '';
+    if (!S.statusLoaded) {
+      h += '<section class="status-card tone-gray"><p class="status-title">' + (S.statusFailed ? 'Your status didn’t load.' : 'Loading your status…') + '</p>' + alertHtml(S.error) +
+        (S.statusFailed ? '<button class="btn mt4" data-act="retry"' + (b ? ' disabled' : '') + '>' + (b === 'status' ? 'Trying again…' : 'Try again') + '</button>' : '') + '</section>';
+    } else if (closed) {
+      h += '<section class="status-card tone-green"><p class="status-title">Timecard signed ✓</p><p class="status-sub">Clock-ins for this pay period are closed. Contact FCCP staff if something needs to change.</p></section>';
+    } else if (state === 'LUNCH') {
+      var lunchFrom = (open && open.lunchOut) || st.sinceTime;
+      h += '<section class="status-card tone-amber"><p class="status-label">On lunch</p><p class="status-title">' + (lunchFrom ? 'Since ' + fmtTime(lunchFrom) : 'Lunch started') + '</p>' +
+        (lunchFrom ? '<p class="status-sub">' + elapsedText(lunchFrom) + ' so far · a full lunch is 30 minutes</p>' : '') +
+        '<button class="btn btn-big btn-amber mt4" data-punch="END_LUNCH"' + (b ? ' disabled' : '') + '>' + (b === 'punch' ? 'Saving…' : 'End Lunch') + '</button></section>';
+    } else if (state === 'OPEN') {
+      var from = (open && open.startTime) || st.sinceTime;
+      h += '<section class="status-card tone-working"><p class="status-label">You’re working</p><p class="status-title">' + (from ? 'Since ' + fmtTime(from) : 'Clocked in') + '</p>' +
+        (from ? '<p class="status-sub">' + elapsedText(from) + ' so far today</p>' : '') +
+        '<button class="btn btn-big btn-red mt4" data-punch="CLOCK_OUT"' + (b ? ' disabled' : '') + '>' + (b === 'punch' ? 'Saving…' : 'Clock Out') + '</button>' +
+        (acts.indexOf('START_LUNCH') >= 0 ? '<button class="btn btn-amber-outline mt3" data-punch="START_LUNCH"' + (b ? ' disabled' : '') + '>Start Lunch</button>' : '') + '</section>';
+    } else {
+      h += '<section class="status-card tone-off"><p class="status-label">You’re off the clock</p><p class="status-title">' + esc(new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'short', day: 'numeric' }).format(new Date())) + '</p>' +
+        (acts.indexOf('CLOCK_IN') >= 0 ? '<button class="btn btn-big btn-go mt4" data-punch="CLOCK_IN"' + (b ? ' disabled' : '') + '>' + (b === 'punch' ? 'Saving…' : 'Clock In') + '</button>' : '<p class="status-sub mt3">No action is available right now.</p>') + '</section>';
     }
-    h += '<div class="group-head" style="margin-top:24px"><h3 class="h3">Sick Time Requests</h3>';
-    if (S.sickError) h += alertHtml(S.sickError);
-    else if (!S.sick.length) h += '<p class="small muted mt3">No sick-time requests for this pay period.</p>';
-    else S.sick.forEach(function (r) {
-      var stx = ['PENDING', 'APPROVED', 'DENIED'].indexOf(String(r.status || '').toUpperCase()) >= 0 ? String(r.status).toLowerCase().replace(/^./, function (c) { return c.toUpperCase(); }) : 'Pending';
-      h += '<article class="shift"><p class="strong">' + esc(fmtShort(r.workDate)) + '</p><p class="small mt1">' + fmtTime(r.startTime) + ' - ' + fmtTime(r.endTime) + '</p>' +
-        '<div class="row-between small mt2" style="align-items:center"><span class="muted">' + (hrs(r.requestedHours != null ? r.requestedHours : r.hours) || '—') + ' hours</span><span class="strong">' + stx + '</span></div>' +
-        (r.reviewNote ? '<p class="small muted mt1">' + esc(r.reviewNote) + '</p>' : '') + '</article>';
-    });
-    return h + '</div></section>';
+    if (S.statusLoaded) h += alertHtml(S.error);
+    if (S.offerBio) {
+      h += '<section class="section tone-blue-soft"><p class="h3">Sign in faster next time</p><p class="small muted mt1">Use your phone’s Face ID or fingerprint instead of typing your PIN.</p>' +
+        '<div class="btn-row"><button class="btn" data-act="notNow"' + (b ? ' disabled' : '') + '>Not now</button><button class="btn btn-primary" data-act="enroll"' + (b ? ' disabled' : '') + '>' + (b === 'deviceEnroll' ? 'Setting up…' : 'Turn it on') + '</button></div>' + alertHtml(S.bioMsg) + '</section>';
+    }
+    // today (hidden when empty)
+    var today = st.today || [];
+    if (today.length) {
+      h += '<section class="section"><h2 class="h3">Today</h2>' + today.map(function (e) { return shiftRow(e, false, true); }).join('') + '</section>';
+    }
+    // balances (blue = information)
+    h += '<div class="tiles">' +
+      '<div class="tile tone-blue-soft"><p class="tile-label">WEX hours left</p><p class="big-num">' + (hrs(bal.hoursRemaining) || '—') + '</p><p class="xs muted">of ' + (hrs(bal.hourLimit) || '—') + ' program hours</p></div>' +
+      '<div class="tile tone-blue-soft"><p class="tile-label">Sick time</p><p class="big-num">' + (hrs(bal.sickAvailable) || '—') + '</p><p class="xs muted">hours available</p></div></div>';
+    return h;
   }
-  function shiftCard(e, closed) {
-    var held = String(e.sheetTab || '') === 'PENDING';
-    // fix 2: the backend decides; a shift that was never clocked out comes back editable.
-    var canEdit = e.editable === true && S.statusLoaded && !closed && e.punchId;
-    var h = '<article class="shift' + (held ? ' shift-held' : '') + '"><p class="strong">' + esc(fmtShort(e.workDate)) + '</p>' + timesDl(e, false) + mealChip(e);
-    if (e.corrected === true) h += '<span class="chip chip-sm mt3">Corrected</span> ';
-    if (e.manuallyAdded === true) h += '<span class="chip chip-sm mt3">Added</span> ';
-    if (held) h += '<span class="chip chip-sm chip-warn mt3">Waiting to go on your timesheet</span>';
-    if (canEdit) h += '<button class="btn btn-green edit-btn" data-edit="' + esc(e.punchId) + '">' + (e.endTime ? 'Edit this shift' : 'Add clock-out time') + ' <span aria-hidden="true">›</span></button>';
-    return h + '</article>';
+
+  // compact one-line shift with details on tap (5)
+  function shiftRow(e, allowEdit, isToday) {
+    var st = String(e.status || '');
+    var notOut = /^(open|lunch)$/i.test(st), held = String(e.sheetTab || '') === 'PENDING', meal = hasMealPremium(e);
+    var badge = notOut ? (isToday ? '<span class="pill pill-green">In progress</span>' : '<span class="pill pill-amber">! Not clocked out</span>')
+      : held ? '<span class="pill pill-blue">Waiting to be added</span>' : '<span class="pill pill-green">✓</span>';
+    var timeText = fmtTime(e.startTime) + ' – ' + (e.endTime ? fmtTime(e.endTime) : '…');
+    var canEdit = allowEdit && e.editable === true && S.statusLoaded && !isClosed() && e.punchId;
+    var h = '<details data-key="s-' + esc(e.punchId || e.workDate + e.startTime) + '" class="srow' + (notOut && !isToday ? ' srow-amber' : '') + '"><summary><span class="srow-day">' + esc(isToday ? 'Today' : fmtShort(e.workDate)) + '</span>' +
+      '<span class="srow-time">' + timeText + '</span><span class="srow-hrs">' + (e.endTime ? (hrs(e.hours) || '0.00') + ' hr' : '') + '</span>' + badge + '</summary><div class="srow-body">' +
+      '<dl class="times"><div><dt>Clock In</dt><dd>' + fmtTime(e.startTime) + '</dd></div><div><dt>Clock Out</dt><dd>' + (e.endTime ? fmtTime(e.endTime) : 'Not yet') + '</dd></div>' +
+      '<div><dt>Lunch</dt><dd>' + (e.lunchOut ? fmtTime(e.lunchOut) + ' – ' + (e.lunchIn ? fmtTime(e.lunchIn) : '…') : 'None') + '</dd></div><div><dt>Type</dt><dd>' + esc(typeLabel(e.type) || 'Regular') + '</dd></div></dl>' +
+      mealChip(e) +
+      (held ? '<p class="info-note">This shift is saved. FCCP will add it to the right timesheet.</p>' : '') +
+      (e.corrected === true ? '<p class="xs muted mt2">Corrected</p>' : e.manuallyAdded === true ? '<p class="xs muted mt2">Added as a missed shift</p>' : '') +
+      (canEdit ? '<button class="btn mt3" data-edit="' + esc(e.punchId) + '">' + (e.endTime ? 'Edit this shift' : 'Add clock-out time') + '</button>' : '') +
+      '</div></details>';
+    if (meal) h = h.replace('<span class="srow-hrs">', '<span class="srow-hrs">★ ');
+    return h;
+  }
+
+  // 6. My Hours: pay period total, compact list, earlier unfinalized shifts
+  function renderHoursTab() {
+    var cur = currentPeriod(), closed = isClosed();
+    var h = '<section class="section tone-hours"><p class="eyebrow">This pay period</p><p class="h2 mt1">' + esc(fmtMDY(cur.start)) + ' to ' + esc(fmtMDY(cur.end)) + '</p>';
+    if (S.shiftsError) return h + alertHtml(S.shiftsError) + '</section>';
+    if (!S.shiftsLoaded) return h + '<p class="small muted mt3">Loading your shifts…</p></section>';
+    var list = liveShifts().sort(function (a, b) { return dayNum(b.workDate) - dayNum(a.workDate) || to24(b.startTime).localeCompare(to24(a.startTime)); });
+    var startNum = dayNum(cur.start);
+    var current = list.filter(function (e) { return !startNum || dayNum(e.workDate) >= startNum; });
+    var earlier = list.filter(function (e) { return startNum && dayNum(e.workDate) < startNum; });
+    var total = current.reduce(function (n, e) { return n + (e.endTime ? Number(e.hours || 0) : 0); }, 0);
+    var days = {}; current.forEach(function (e) { days[e.workDate] = 1; });
+    var meals = current.filter(hasMealPremium).length;
+    h += '<div class="total-row"><div><p class="big-num">' + total.toFixed(2) + '</p><p class="xs muted">hours worked</p></div><div><p class="big-num">' + Object.keys(days).length + '</p><p class="xs muted">days</p></div>' +
+      (meals ? '<div><p class="big-num">+' + meals + '</p><p class="xs muted">meal premium hr</p></div>' : '') + '</div>';
+    h += '<button class="btn btn-go mt4" data-act="missed"' + (!S.statusLoaded || closed ? ' disabled' : '') + '>+ Add Missed Shift</button>';
+    h += '<p class="xs muted mt2">Use this if you worked but forgot to clock in or out.</p></section>';
+    h += '<section class="section">' + (current.length ? current.map(function (e) { return shiftRow(e, true, false); }).join('') : '<p class="small muted">No shifts yet this pay period.</p>') + '</section>';
+    if (earlier.length) {
+      h += '<section class="section tone-amber-soft"><h2 class="h3">Earlier pay period – not finalized yet</h2><p class="small muted mt1">FCCP hasn’t finalized these yet, so you can still fix them.</p>' +
+        earlier.map(function (e) { return shiftRow(e, true, false); }).join('') + '</section>';
+    }
+    h += '<p class="xs muted legend"><span class="pill pill-green">✓</span> saved · <span class="pill pill-amber">!</span> needs fixing · <span class="pill pill-blue">i</span> waiting · ★ meal premium</p>';
+    return h;
+  }
+
+  // 7. Timecard: steps Review -> Sign -> Done, reminder, past timecards
+  function stepsHtml(active) {
+    return '<ol class="steps">' + ['Review', 'Sign', 'Done'].map(function (s, i) {
+      return '<li class="' + (i < active ? 'done' : i === active ? 'now' : '') + '"><span>' + (i < active ? '✓' : i + 1) + '</span>' + s + '</li>';
+    }).join('') + '</ol>';
+  }
+  function renderTimecardTab() {
+    var st = S.status || {}, tc = st.timecard || {}, closed = isClosed();
+    var h = '<section class="section tone-card">';
+    if (tc.status === 'Reopened') h += '<div class="callout tone-amber"><p class="strong">FCCP reopened your timecard</p><p class="small mt1">Check your shifts, fix anything needed, and sign it again.</p>' + (tc.reopenReason ? '<p class="small mt2"><b>Reason:</b> ' + esc(tc.reopenReason) + '</p>' : '') + '</div>';
+    if (closed) {
+      h += stepsHtml(3) + '<div class="callout tone-green"><p class="strong">Signed ✓</p>' + (tc.submittedAt ? '<p class="small mt1">Submitted ' + esc(fmtStamp(tc.submittedAt)) + '</p>' : '') + '<p class="small mt1">Your timecard is closed for this pay period. Contact FCCP staff if a correction is needed.</p></div>';
+    } else {
+      h += '<h2 class="h2">Sign your timecard</h2><p class="small muted mt1">Do this after your last shift of the pay period.</p>' + stepsHtml(0) +
+        '<button class="btn btn-go btn-big mt4" data-act="submit"' + (!S.statusLoaded ? ' disabled' : '') + '>Review &amp; Sign</button>' +
+        '<p class="xs muted mt2" style="text-align:center">After you sign, you can’t change this pay period unless FCCP reopens it.</p>';
+    }
+    h += '</section>';
+    h += '<section class="section"><h2 class="h3">Past timecards</h2>';
+    if (!S.pastLoaded) h += '<p class="small muted mt3">Checking earlier pay periods…</p>';
+    else if (S.pastError) h += alertHtml(S.pastError);
+    else if (!S.past.length) h += '<p class="small muted mt3">No earlier timecards yet.</p>';
+    else S.past.forEach(function (t) {
+      var fin = t.status === 'Manager Finalized', sub = ['Submitted', 'Needs Re-signature'].indexOf(t.status) >= 0, re = t.status === 'Reopened';
+      var txt = fin ? '✓ Finalized by FCCP' : sub ? '✓ Signed' : re ? '! Reopened – sign again' : '! Not signed';
+      var cls = fin || sub ? 'pill-green' : 'pill-amber';
+      h += '<details data-key="p-' + esc(t.start) + '" class="past"><summary><div class="row-between" style="align-items:center"><div><p class="strong">' + esc(fmtMDY(t.start)) + ' to ' + esc(fmtMDY(t.end)) + '</p>' +
+        '<p class="small muted mt1">' + t.shiftCount + ' ' + (t.shiftCount === 1 ? 'shift' : 'shifts') + ' · ' + (hrs(t.totalHours) || '0.00') + ' hours</p></div><span class="pill ' + cls + '">' + txt + '</span></div></summary>' +
+        (t.submittedAt ? '<p class="small muted mt3">Signed ' + esc(fmtStamp(t.submittedAt)) + '</p>' : '');
+      if ((t.shifts || []).length) t.shifts.forEach(function (s) {
+        h += '<div class="past-shift"><p class="strong">' + esc(fmtShort(s.workDate)) + '</p><p class="small mt1">' + fmtTime(s.startTime) + ' – ' + fmtTime(s.endTime) + ' · ' + (hrs(s.hours != null ? s.hours : s.workedHours) || '—') + ' hr · ' + esc(typeLabel(s.type) || 'Regular') + '</p></div>';
+      });
+      else h += '<p class="small muted mt3">No saved shifts for this period.</p>';
+      h += '</details>';
+    });
+    return h + '</section>';
+  }
+
+  // More: sick time, program hours, device sign-in, help
+  function renderMoreTab() {
+    var st = S.status || {}, bal = st.balances || {}, b = S.busy, closed = isClosed();
+    var sickAvail = Number(bal.sickAvailable);
+    var h = '<section class="section tone-blue-soft"><h2 class="h3">Your WEX hours</h2><div class="total-row"><div><p class="big-num">' + (hrs(bal.hoursRemaining) || '—') + '</p><p class="xs muted">hours left</p></div><div><p class="big-num">' + (hrs(bal.hourLimit) || '—') + '</p><p class="xs muted">program limit</p></div></div>' +
+      '<p class="xs muted mt2">Regular time, sick time and meal premiums all count toward the limit.</p></section>';
+    h += '<section class="section"><h2 class="h3">Sick time</h2><p class="mt1"><span class="big-num">' + (hrs(bal.sickAvailable) || '0.00') + '</span> <span class="small muted">hours available</span></p>';
+    if (sickAvail > 0) h += '<button class="btn btn-go mt3" data-act="sick"' + (!S.statusLoaded || closed ? ' disabled' : '') + '>Request Sick Time</button>';
+    else h += '<p class="info-note">You earn 1 hour of sick time for every 30 hours you work. When you have some, you can request it here.</p>';
+    if (S.sickError) h += alertHtml(S.sickError);
+    else if (S.sick.length) {
+      h += '<h3 class="small strong mt4">Your requests</h3>';
+      S.sick.forEach(function (r) {
+        var s = String(r.status || 'Pending').toUpperCase(), cls = s === 'APPROVED' ? 'pill-green' : s === 'DENIED' ? 'pill-red' : 'pill-amber';
+        h += '<div class="past-shift row-between" style="align-items:center"><div><p class="strong">' + esc(fmtShort(r.workDate)) + '</p><p class="small mt1">' + fmtTime(r.startTime) + ' – ' + fmtTime(r.endTime) + ' · ' + (hrs(r.requestedHours != null ? r.requestedHours : r.hours) || '—') + ' hr</p>' +
+          (r.reviewNote ? '<p class="xs muted mt1">' + esc(r.reviewNote) + '</p>' : '') + '</div><span class="pill ' + cls + '">' + s.charAt(0) + s.slice(1).toLowerCase() + '</span></div>';
+      });
+    }
+    h += '</section>';
+    h += '<section class="section"><h2 class="h3">This phone</h2>';
+    if (S.bioSaved) h += '<p class="small muted mt1">Face ID / fingerprint sign-in is on.</p><button class="link mt3" data-act="revoke"' + (b ? ' disabled' : '') + '>' + (b === 'deviceRevoke' ? 'Turning off…' : 'Turn off Face ID / fingerprint') + '</button>';
+    else if (S.bioAvailable) h += '<p class="small muted mt1">Sign in with Face ID or fingerprint instead of your PIN.</p><button class="btn mt3" data-act="enroll"' + (b ? ' disabled' : '') + '>' + (b === 'deviceEnroll' ? 'Setting up…' : 'Turn on Face ID / fingerprint') + '</button>';
+    else h += '<p class="small muted mt1">Face ID / fingerprint sign-in isn’t available in this browser.</p>';
+    h += alertHtml(S.bioMsg) + '</section>';
+    h += '<section class="section"><h2 class="h3">Help</h2><button class="btn mt3" data-act="guide">How to use this app</button>' +
+      '<button class="btn mt3" data-act="logout"' + (b ? ' disabled' : '') + '>Sign out</button></section>';
+    return h;
+  }
+
+  // 9. first-time guide
+  var GUIDE = [
+    ['Clock in and out', 'Tap the green Clock In button when you start work. Tap Clock Out when you finish.'],
+    ['Take your lunch', 'Working more than 5 hours? Take a 30-minute lunch. Tap Start Lunch when you leave and End Lunch when you’re back.'],
+    ['Forgot to punch?', 'Open My Hours and tap Add Missed Shift, or tap a shift to fix it.'],
+    ['Sign your timecard', 'After your last shift of the pay period, open Timecard and tap Review & Sign.']
+  ];
+  function renderGuide() {
+    var i = S.guide, g = GUIDE[i];
+    return '<div class="overlay"><section role="dialog" aria-modal="true" class="dialog guide"><p class="xs muted">' + (i + 1) + ' of ' + GUIDE.length + '</p>' +
+      '<h2 class="title mt2" style="font-size:24px">' + esc(g[0]) + '</h2><p class="mt3">' + esc(g[1]) + '</p>' +
+      '<div class="dots">' + GUIDE.map(function (x, k) { return '<i class="' + (k === i ? 'on' : '') + '"></i>'; }).join('') + '</div>' +
+      '<div class="btn-row"><button class="btn" data-act="' + (i > 0 ? 'guideBack' : 'guideSkip') + '">' + (i > 0 ? 'Back' : 'Skip') + '</button><button class="btn btn-primary" data-act="guideNext">' + (i === GUIDE.length - 1 ? 'Got it' : 'Next') + '</button></div></section></div>';
   }
 
   // ---------------------------------------------------------------- modals render
@@ -837,12 +980,12 @@
   function submitHtml(m) {
     var rv = m.review, t = (rv && rv.totals) || {}, total = t.totalCountableHours != null ? t.totalCountableHours : t.countableHours != null ? t.countableHours : t.totalHours;
     var pp = (rv && rv.payPeriod) || (S.status && S.status.payPeriod) || {}, name = (rv && rv.participant && (rv.participant.name || rv.participant)) || (S.participant && S.participant.name) || '';
-    if (m.step === 'done') return '<div role="status" class="done"><h2 class="title" style="font-size:24px">YOUR TIMECARD HAS BEEN SUBMITTED.</h2><p class="small muted mt3">Your timecard is closed. FCCP will reopen it if a correction is needed.</p></div>';
-    if (m.step === 'sign') return '<h2 class="title" style="font-size:24px">Sign Your Timecard</h2><div class="panel small mt4"><p class="strong">' + esc(name) + '</p><p class="mt1">Pay period: ' + esc(fmtMDY(pp.start)) + ' to ' + esc(fmtMDY(pp.end)) + '</p>' +
+    if (m.step === 'done') return stepsHtml(3) + '<div role="status" class="done"><h2 class="title" style="font-size:24px">YOUR TIMECARD HAS BEEN SUBMITTED.</h2><p class="small muted mt3">Your timecard is closed. FCCP will reopen it if a correction is needed.</p></div>';
+    if (m.step === 'sign') return stepsHtml(1) + '<h2 class="title" style="font-size:24px">Sign Your Timecard</h2><div class="panel small mt4"><p class="strong">' + esc(name) + '</p><p class="mt1">Pay period: ' + esc(fmtMDY(pp.start)) + ' to ' + esc(fmtMDY(pp.end)) + '</p>' +
       '<p class="mt1">Total countable hours: <b>' + (hrs(total) || '—') + '</b></p><p class="mt4">I certify that the time shown is complete and accurate and reflects all time I worked during this pay period. I understand that submitting this timecard closes my time for this pay period.</p></div>' +
       '<canvas id="sig" class="sig" aria-label="Draw your signature"></canvas><button class="btn btn-inline mt3" data-act="clearSig">Clear Signature</button>' + alertHtml(m.err) +
       '<div class="btn-row" id="sigButtons">' + sigButtons(m) + '</div>';
-    var h = '<h2 class="title" style="font-size:24px">Review your timecard</h2><div class="notice-gold"><p class="strong">Submitting closes this pay period. If a correction is needed, FCCP can reopen it; you will get a message to review and submit again.</p></div>';
+    var h = stepsHtml(0) + '<h2 class="title" style="font-size:24px">Review your timecard</h2><div class="notice-gold"><p class="strong">Submitting closes this pay period. If a correction is needed, FCCP can reopen it; you will get a message to review and submit again.</p></div>';
     if (m.loading) h += '<p class="small muted mt5">Loading your pay-period review…</p>';
     else if (rv) {
       h += '<div class="panel mt5"><p class="strong">' + esc(name) + '</p><p class="small mt1">Pay period: ' + esc(fmtMDY(pp.start)) + ' to ' + esc(fmtMDY(pp.end)) + '</p><dl class="times">' +
@@ -929,6 +1072,7 @@
   });
   app.addEventListener('keydown', function (e) {
     if (e.key !== 'Enter') return;
+    if (e.target.classList && e.target.classList.contains('tappable')) { e.preventDefault(); e.target.click(); return; }
     var id = e.target.id;
     var next = { code: S.view === 'activate' ? 'act' : 'pin', act: 'pin', pin: S.view === 'activate' ? 'pin2' : null };
     if (next[id] !== undefined && next[id] !== null) { e.preventDefault(); var n = document.getElementById(next[id]); if (n) n.focus(); }
@@ -937,7 +1081,8 @@
     if (e.target.getAttribute && e.target.getAttribute('data-overlay') && S.modal && !S.modal.busy && S.modal.kind !== 'sick' && S.modal.kind !== 'missed') { S.modal = null; render(); }
   });
   app.addEventListener('click', function (e) {
-    var el = e.target.closest('[data-act],[data-punch],[data-edit]'); if (!el || el.disabled) return;
+    var el = e.target.closest('[data-act],[data-punch],[data-edit],[data-tab]'); if (!el || el.disabled) return;
+    if (el.hasAttribute('data-tab') && !el.hasAttribute('data-act')) { S.tab = el.getAttribute('data-tab'); sSet('sessionStorage', 'wexTab', S.tab); render(); window.scrollTo(0, 0); return; }
     if (el.hasAttribute('data-punch')) return doPunch(el.getAttribute('data-punch'));
     if (el.hasAttribute('data-edit')) return openEdit(el.getAttribute('data-edit'));
     var a = el.getAttribute('data-act'), m = S.modal;
@@ -965,6 +1110,10 @@
       case 'sigBack': if (m && !m.busy) { m.step = 'review'; m.err = ''; render(); } break;
       case 'sigSubmit': submitSigned(); break;
       case 'closeModal': if (m && !m.busy) { S.modal = null; render(); } break;
+      case 'guide': maybeShowGuide(true); break;
+      case 'guideNext': if (S.guide >= GUIDE.length - 1) closeGuide(); else { S.guide++; render(); } break;
+      case 'guideBack': if (S.guide > 0) { S.guide--; render(); } break;
+      case 'guideSkip': closeGuide(); break;
     }
   });
 
