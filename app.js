@@ -180,7 +180,7 @@
   // ---------------------------------------------------------------- API
   function api(body) {
     var ctrl = new AbortController();
-    var timer = setTimeout(function () { ctrl.abort(); }, body.action === 'timecardReview' ? 90000 : 25000);
+    var timer = setTimeout(function () { ctrl.abort(); }, (body.action === 'timecardReview' || body.action === 'submitTimecard') ? 90000 : 25000); // 2026-10-26: signing can take longer than 25 seconds
     return fetch(API_URL, {
       method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify(body), redirect: 'follow', signal: ctrl.signal
@@ -586,6 +586,7 @@
     var oc = out.getContext('2d'); oc.fillStyle = '#ffffff'; oc.fillRect(0, 0, out.width, out.height); oc.drawImage(canvas, 8 - minX, 8 - minY);
     var dataUrl = out.toDataURL('image/png');
     m.busy = true; m.err = ''; renderSubmitButtons();
+    var sentAt = Date.now();
     api({ action: 'submitTimecard', token: S.token, certifyAccurate: true, certifyClose: true, signatureDataUrl: dataUrl }).then(function (x) {
       if (isExpired(x.resp, x.r)) { expired(); return; }
       if (x.r.ok !== true) { m.err = errText(x.r, 'Unable to submit your timecard.'); m.busy = false; render(); return; }
@@ -593,8 +594,10 @@
       return refreshAll().then(function () { return wait(2000); }).then(function () { if (S.modal === m) S.modal = null; render(); });
     }).catch(function () {
       // The answer may have been lost after the card was saved; check before asking to try again.
-      return api({ action: 'status', token: S.token }).then(function (x) {
-        if (x.r && x.r.timecard && x.r.timecard.closed === true) { S.closedLocal = true; m.step = 'done'; m.busy = false; render(); return refreshAll().then(function () { return wait(2000); }).then(function () { if (S.modal === m) S.modal = null; render(); }); }
+      // 2026-10-26: check the pay period being signed (it can be an earlier one), not today's pay period.
+      return api({ action: 'timecardReview', token: S.token }).then(function (x) {
+        var c = x.r && x.r.closure;
+        if (c && c.status === 'Submitted' && Date.parse(c.submittedAt || '') >= sentAt - 120000) { S.closedLocal = true; m.step = 'done'; m.busy = false; render(); return refreshAll().then(function () { return wait(2000); }).then(function () { if (S.modal === m) S.modal = null; render(); }); }
         throw new Error();
       }).catch(function () { m.err = 'The timekeeping service did not respond. Please try again.'; m.busy = false; render(); });
     });
