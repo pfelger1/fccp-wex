@@ -661,7 +661,11 @@
     else if (S.view === 'forgot') html = renderForgot();
     else html = renderHome();
     var openKeys = {}; Array.prototype.forEach.call(app.querySelectorAll('details[open][data-key]'), function (d) { openKeys[d.getAttribute('data-key')] = 1; });
+    // 2026-10-26: keep the pop-up window's scroll spot when it redraws (checking a box no longer jumps to the top).
+    var oldDialog = app.querySelector('.dialog'), dialogTop = oldDialog ? oldDialog.scrollTop : 0, dialogKey = S.modal ? S.modal.kind + '|' + (S.modal.step || '') : '';
     app.innerHTML = banner() + html + renderModal();
+    var newDialog = app.querySelector('.dialog'); if (newDialog && oldDialog && dialogKey && dialogKey === render.lastDialogKey) newDialog.scrollTop = dialogTop;
+    render.lastDialogKey = dialogKey;
     Array.prototype.forEach.call(app.querySelectorAll('details[data-key]'), function (d) { if (openKeys[d.getAttribute('data-key')]) d.open = true; });
     if (focusId) { var el = document.getElementById(focusId); if (el && el.tagName !== 'BUTTON') { el.focus(); if (el.setSelectionRange && el.type !== 'date') try { el.setSelectionRange(el.value.length, el.value.length); } catch (e) {} } }
     setupSignature();
