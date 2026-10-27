@@ -54,7 +54,7 @@
   };
   var toastTimer = null;
   function showToast(t) { S.toast = t; render(); clearTimeout(toastTimer); toastTimer = setTimeout(function () { S.toast = ''; render(); }, 3500); }
-  function maybeShowGuide(force) { if (force || sGet('localStorage', 'wexGuideSeen') !== 'yes') { S.guide = 0; render(); } }
+  function maybeShowGuide(force) { if (S.view === 'sup' || (typeof isSupSession === 'function' && isSupSession(S.participant))) return; /* 2026-10-26: no WEX guide for supervisors */ if (force || sGet('localStorage', 'wexGuideSeen') !== 'yes') { S.guide = 0; render(); } }
   function closeGuide() { S.guide = null; sSet('localStorage', 'wexGuideSeen', 'yes'); render(); }
   // 2026-10-25: "Install the app on your phone" card (sign-in, first-time setup, More tab).
   var installEvt = null;
@@ -1541,7 +1541,7 @@
 
   // ---------------------------------------------------------------- start
   var saved = sGet('sessionStorage', TOKEN_KEY);
-  if (saved && sGet('sessionStorage', SUP_ROLE_KEY) === 'sup') { S.token = saved; S.view = 'sup'; render(); loadSupList(true); } // 2026-10-26
+  if (saved && (sGet('sessionStorage', SUP_ROLE_KEY) === 'sup' || isSupCode(S.code))) { S.token = saved; S.view = 'sup'; render(); loadSupList(true); } // 2026-10-26
   else if (saved) {
     S.token = saved; S.view = 'session'; render();
     loadStatus(false).then(function (ok) {
