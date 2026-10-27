@@ -185,7 +185,7 @@
   // ---------------------------------------------------------------- API
   function api(body) {
     var ctrl = new AbortController();
-    var timer = setTimeout(function () { ctrl.abort(); }, (body.action === 'timecardReview' || body.action === 'submitTimecard' || body.action === 'addMissedShift' || body.action === 'editShift' || /^sup/.test(body.action)) ? 90000 : 25000); // 2026-10-26: signing can take longer than 25 seconds; 2026-10-27: also supervisor actions, add missed shift, fix a shift
+    var timer = setTimeout(function () { ctrl.abort(); }, (body.action === 'timecardReview' || body.action === 'submitTimecard' || body.action === 'addMissedShift' || body.action === 'editShift' || body.action === 'login' || body.action === 'deviceLogin' || /^sup/.test(body.action)) ? 90000 : 25000); // 2026-10-26: signing can take longer than 25 seconds; 2026-10-27: also supervisor actions, add missed shift, fix a shift, sign-in
     return fetch(API_URL, {
       method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify(body), redirect: 'follow', signal: ctrl.signal
