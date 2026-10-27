@@ -174,6 +174,11 @@
   function typeLabel(t) { return /lunch penalty/i.test(String(t || '')) ? 'Regular + meal premium' : (t || ''); }
   function mealChip(e) { return hasMealPremium(e) ? '<p class="meal-note">Meal premium: +1 hour of pay. You worked over 5 hours without a 30-minute lunch.</p>' : ''; }
   function isSuperseded(e) { return e.superseded === true || e.cancelled === true || [e.status, e.correctionStatus].some(function (s) { return ['SUPERSEDED', 'CANCELLED', 'CANCELED'].indexOf(String(s || '').toUpperCase()) >= 0; }); }
+  // 2026-10-26: the supervisor sent the timecard back (and has the WEX changed anything since?)
+  function supAsked() { var tc = (S.status && S.status.timecard) || {}; return tc.status === 'Reopened' && /^Your supervisor asked/.test(tc.reopenReason || ''); }
+  function supFixed() { return supAsked() && S.status.timecard.changedSinceRequest === true; }
+  function supNotes() { return (supAsked() && S.status.timecard.changeRequests) || []; }
+  function isSignedNow() { var tc = (S.status && S.status.timecard) || {}; return tc.status === 'Submitted' && !isClosed(); }
   function isClosed() { return (S.status && S.status.timecard && S.status.timecard.closed === true) || S.closedLocal; }
   function allowed() { return ((S.status && S.status.allowedActions) || []).map(function (a) { return String(a).toUpperCase(); }); }
 
@@ -799,7 +804,9 @@
     if (bal.hoursRemaining != null && Number(bal.hoursRemaining) === 0) return { tone: 'red', text: 'You have no WEX hours left. Talk to FCCP staff before you work again.' };
     if (meal === 'TAKE_LUNCH_NOW') return { tone: 'red', text: 'Take your lunch now. Tap Start Lunch.' };
     if (forgot) return { tone: 'amber', text: 'You forgot to clock out on ' + fmtShort(forgot.workDate) + '. Tap here to add your clock-out time.', edit: forgot.punchId };
-    if (tc.status === 'Reopened') return { tone: 'amber', text: (/^Your supervisor asked/.test(tc.reopenReason || '') ? 'Your supervisor asked for a change. Tap here to see it, fix it, and sign again.' : 'FCCP reopened your timecard. Tap here to review and sign it again.'), tab: 'timecard' }; // 2026-10-26
+    if (supFixed()) return { tone: 'amber', text: 'You changed your hours. Now sign your timecard again. Tap here.', tab: 'timecard' }; // 2026-10-26
+    if (supAsked()) return { tone: 'amber', text: 'Your supervisor asked for a change. Tap here to fix your shift.', tab: 'hours' };
+    if (tc.status === 'Reopened') return { tone: 'amber', text: 'FCCP reopened your timecard. Tap here to review and sign it again.', tab: 'timecard' };
     if (unsigned && !closed) return { tone: 'amber', text: 'Your timecard for ' + fmtMDY(unsigned.start) + ' to ' + fmtMDY(unsigned.end) + ' still needs your signature. Tap here.', tab: 'timecard' };
     if (meal === 'LUNCH_DUE_SOON') return { tone: 'amber', text: 'Lunch is due soon. Start a 30-minute lunch before you reach 5 hours.' };
     var early = earlyPrompt();
@@ -906,6 +913,10 @@
       (canEdit ? '<button class="btn mt3" data-edit="' + esc(e.punchId) + '">' + (e.endTime ? 'Edit this shift' : 'Add clock-out time') + '</button>' : '') +
       '</div></details>';
     if (meal) h = h.replace('<span class="srow-hrs">', '<span class="srow-hrs">★ ');
+    // 2026-10-26: the supervisor's note on this day, and a visible button to fix the shift
+    var notes = allowEdit ? supNotes().filter(function (r) { return r.workDate === e.workDate; }) : [];
+    if (notes.length) h = h.replace('class="srow', 'class="srow srow-flag') + '<p class="sup-note">' + notes.map(function (r) { return '<b>Your supervisor:</b> ' + esc(r.issue) + ' – ' + esc(r.note); }).join('<br>') + '</p>';
+    if (canEdit) h += '<button class="btn btn-sm srow-fix' + (notes.length ? ' btn-primary' : '') + '" data-edit="' + esc(e.punchId) + '">' + (e.endTime ? 'Fix this shift ›' : 'Add clock-out time ›') + '</button>';
     return h;
   }
 
@@ -954,9 +965,12 @@
   function renderTimecardTab() {
     var st = S.status || {}, tc = st.timecard || {}, closed = isClosed();
     var h = '<section class="section tone-card">';
-    if (tc.status === 'Reopened' && /^Your supervisor asked/.test(tc.reopenReason || '')) h += '<div class="callout tone-amber"><p class="strong">Your supervisor asked for a change</p><p class="small mt1">' + esc(String(tc.reopenReason).replace(/^Your supervisor asked for a change: /, '')) + '</p><p class="small mt2">Fix the shift on My Hours, then sign again. If the hours are right, you can sign again without changes.</p></div>'; // 2026-10-26
+    if (supFixed()) h += '<div class="callout tone-green"><p class="strong">You changed your hours ✓</p><p class="small mt1">Now sign your timecard again so your supervisor can review it.</p></div>'; // 2026-10-26
+    else if (supAsked()) h += '<div class="callout tone-amber"><p class="strong">Your supervisor asked for a change</p><p class="small mt1">' + esc(String(tc.reopenReason).replace(/^Your supervisor asked for a change: /, '')) + '</p><p class="small mt2">Fix the shift on My Hours, then sign again. If the hours are right, you can sign again without changes.</p><button class="btn mt3" data-tab="hours">Go to My Hours ›</button></div>';
     else if (tc.status === 'Reopened') h += '<div class="callout tone-amber"><p class="strong">FCCP reopened your timecard</p><p class="small mt1">Check your shifts, fix anything needed, and sign it again.</p>' + (tc.reopenReason ? '<p class="small mt2"><b>Reason:</b> ' + esc(tc.reopenReason) + '</p>' : '') + '</div>';
-    if (closed) {
+    if (!closed && isSignedNow()) { // 2026-10-26: signed, waiting for FCCP
+      h += stepsHtml(3) + '<div class="callout tone-green"><p class="strong">Signed ✓</p>' + (tc.submittedAt ? '<p class="small mt1">' + esc(fmtStamp(tc.submittedAt)) + '</p>' : '') + '<p class="small mt1">You’re done for this pay period. If you change a shift, you’ll be asked to sign again.</p></div>';
+    } else if (closed) {
       h += stepsHtml(3) + '<div class="callout tone-green"><p class="strong">Signed ✓</p>' + (tc.submittedAt ? '<p class="small mt1">Submitted ' + esc(fmtStamp(tc.submittedAt)) + '</p>' : '') + '<p class="small mt1">Your timecard is closed for this pay period. Contact FCCP staff if a correction is needed.</p></div>';
     } else {
       h += '<h2 class="h2">Sign your timecard</h2><p class="small muted mt1">Do this after your last shift of the pay period.</p>' + stepsHtml(0) +
@@ -1125,7 +1139,7 @@
     return h;
   }
   function sigButtons(m) {
-    if (m.kind === 'sup') return '<button class="btn" data-act="supSignBack"' + (m.busy ? ' disabled' : '') + '>Go Back</button><button class="btn btn-primary" data-act="supSign"' + (!m.signed || m.busy ? ' disabled' : '') + '>' + (m.busy ? 'Signing…' : 'Sign Timecard') + '</button>'; // 2026-10-26
+    if (m.kind === 'sup') return '<button class="btn" data-act="supSignBack"' + (m.busy ? ' disabled' : '') + '>Go Back</button><button class="btn btn-primary" data-act="supSign"' + (!m.signed || m.busy ? ' disabled' : '') + '>' + (m.busy ? 'Signing… (a few seconds)' : 'Sign Timecard') + '</button>'; // 2026-10-26
     return '<button class="btn" data-act="sigBack"' + (m.busy ? ' disabled' : '') + '>Go Back</button><button class="btn btn-primary" data-act="sigSubmit"' + (!m.signed || m.busy ? ' disabled' : '') + '>' + (m.busy ? 'Submitting signed timecard...' : 'Submit Signed Timecard') + '</button>';
   }
   function renderSubmitButtons() { var el = document.getElementById('sigButtons'); if (el && S.modal) el.innerHTML = sigButtons(S.modal); }
@@ -1210,7 +1224,7 @@
   // 2026-10-26: short guide for supervisors (first sign-in, and from "How this works")
   var SUP_GUIDE = [
     ['Your WEX timecards', 'Your list shows every WEX at your worksite. Ready for you means the WEX signed and it\u2019s your turn. Sign by noon on the Monday after the pay period ends. If your worksite has two supervisors, only one of you needs to sign.'],
-    ['Check the hours', 'Tap a name to see their shifts, sick time and total hours. If something is wrong, tap Report a problem under that day and add a short note. The WEX gets an email to fix it and sign again, and it comes back to you.'],
+    ['Check the hours', 'Tap a name to see their shifts, sick time and total hours. If something is wrong, tap Ask for a change under that day and add a short note. The WEX gets an email to fix it and sign again, and it comes back to you.'],
     ['Evaluate and sign', 'If the hours are right, tap Hours are correct. Answer the evaluation questions one at a time. You can skip any of them. Then sign with your finger. Your signature, name, and the date and time go on the timesheet.']
   ];
   function supGuideHtml() {
@@ -1222,11 +1236,12 @@
   }
   function closeSupGuide() { SUP.guide = null; sSet('localStorage', 'wexSupGuideSeen', 'yes'); render(); }
   function supRow(p) {
-    var pill = { ready: ['pill-amber', 'Ready for you'], change: ['pill-blue', 'Change requested'], waiting: ['pill-blue', 'Waiting on WEX'], done: ['pill-green', '✓ Signed'] }[p.state] || ['pill-blue', ''];
+    var st = { ready: ['st-amber', 'Ready for you'], change: ['st-blue', 'Change requested'], waiting: ['st-blue', 'Waiting on WEX'], done: ['st-green', '✓ Signed'] }[p.state] || ['st-blue', ''];
     var sub = p.state === 'done' ? 'Signed by ' + esc(p.signedBy || '') + (p.signedAt ? ' · ' + esc(supWhen(p.signedAt)) : '') : esc(p.note || '');
-    return '<button class="sup-row" data-act="supOpen" data-code="' + esc(p.code) + '"><span class="sup-row-main"><span class="strong">' + esc(p.name) + '</span>' +
+    return '<button class="sup-row" data-act="supOpen" data-code="' + esc(p.code) + '" data-name="' + esc(p.name) + '"><span class="sup-row-main"><span class="strong">' + esc(p.name) + '</span>' +
+      '<span class="small strong ' + st[0] + '">' + st[1] + '</span>' +
       '<span class="small muted">' + esc(fmtMDY(p.payPeriod && p.payPeriod.start)) + ' to ' + esc(fmtMDY(p.payPeriod && p.payPeriod.end)) + ((SUP.list.supervisor.worksites || []).length > 1 ? ' · ' + esc(p.worksite) : '') + '</span>' +
-      (sub ? '<span class="xs muted">' + sub + '</span>' : '') + '</span><span class="pill ' + pill[0] + '">' + pill[1] + '</span></button>';
+      (sub ? '<span class="xs muted">' + sub + '</span>' : '') + '</span><span class="sup-go' + (p.state === 'ready' ? ' on' : '') + '">' + (p.state === 'ready' ? 'Review ›' : 'View ›') + '</span></button>';
   }
   function renderSup() {
     var p = S.participant || {}, b = S.busy, L = SUP.list;
@@ -1254,8 +1269,8 @@
         if (!SUP.hist.length && !SUP.histLoading) h += '<p class="small muted mt1">No finalized pay periods yet.</p>';
         SUP.hist.forEach(function (pp) {
           h += '<p class="strong mt4">' + esc(fmtMDY(pp.start)) + ' to ' + esc(fmtMDY(pp.end)) + '</p>' + pp.participants.map(function (x) {
-            return '<button class="sup-row" data-act="supOpen" data-code="' + esc(x.code) + '" data-start="' + esc(pp.start) + '"><span class="sup-row-main"><span class="strong">' + esc(x.name) + '</span>' +
-              '<span class="xs muted">' + (x.signedBy ? 'Signed by ' + esc(x.signedBy) + (x.signedAt ? ' · ' + esc(supWhen(x.signedAt)) : '') : 'No supervisor signature') + '</span></span><span class="pill pill-green">Finalized</span></button>';
+            return '<button class="sup-row" data-act="supOpen" data-code="' + esc(x.code) + '" data-name="' + esc(x.name) + '" data-start="' + esc(pp.start) + '"><span class="sup-row-main"><span class="strong">' + esc(x.name) + '</span>' +
+              '<span class="xs muted">' + (x.signedBy ? 'Signed by ' + esc(x.signedBy) + (x.signedAt ? ' · ' + esc(supWhen(x.signedAt)) : '') : 'No supervisor signature') + '</span></span><span class="sup-go">View ›</span></button>';
           }).join('');
         });
         if (SUP.histLoading) h += '<p class="small muted mt3">Loading…</p>';
@@ -1271,8 +1286,8 @@
   }
 
   // ---- one timecard: review -> evaluation (one question per screen) -> comments -> summary -> sign
-  function openSupCard(code, start) {
-    var m = { kind: 'sup', step: 'review', code: code, start: start || '', card: null, loading: true, err: '', busy: false,
+  function openSupCard(code, start, name) {
+    var m = { kind: 'sup', step: 'review', code: code, start: start || '', name: name || '', card: null, loading: true, err: '', busy: false,
       flags: {}, flagOpen: '', general: '', reporting: false, evalIdx: 0, answers: {}, comments: '', signed: false, result: null };
     S.modal = m; render();
     loadSupCard(m);
@@ -1294,7 +1309,7 @@
   }
   function supReviewHtml(m) {
     var c = m.card;
-    if (m.loading && !c) return '<p class="small muted">Loading timecard…</p>';
+    if (m.loading && !c) return '<p class="strong">Opening ' + esc(m.name ? m.name + '’s' : 'the') + ' timecard…</p><p class="small muted mt2">This can take a few seconds while we check the hours.</p>';
     if (!c) return alertHtml(m.err) + '<div class="btn-row"><button class="btn" data-act="closeModal">Close</button><span></span></div>';
     var t = c.totals || {}, h = supCardHead(m);
     if (c.signoff) h += '<div class="callout tone-green mt4"><p class="strong">✓ Signed by ' + esc(c.signoff.by) + '</p>' + (c.signoff.at ? '<p class="small mt1">' + esc(supWhen(c.signoff.at)) + '</p>' : '') + '</div>';
@@ -1320,7 +1335,7 @@
             (c.issues || []).map(function (i) { return '<option' + (f.issue === i ? ' selected' : '') + '>' + esc(i) + '</option>'; }).join('') + '</select></label>' +
             '<label class="field">Note for ' + esc((c.participant || {}).name || 'the WEX') + '<textarea id="supNote-' + esc(e.workDate) + '" class="textarea" rows="2" maxlength="500" data-supfield="note" data-date="' + esc(e.workDate) + '" placeholder="Example: He left at 2, not 4.">' + esc(f.note || '') + '</textarea></label>' +
             '<div class="btn-row"><button class="btn" data-act="supUnflag" data-date="' + esc(e.workDate) + '">Remove</button><button class="btn btn-primary" data-act="supFlagDone">Done</button></div></div>';
-        } else h += '<button class="link mt2" data-act="supFlag" data-date="' + esc(e.workDate) + '">' + (flagged ? '✎ Problem reported: ' + esc(flagged.issue || '') + ' (change)' : 'Report a problem') + '</button>';
+        } else h += '<button class="btn btn-sm sup-ask mt3" data-act="supFlag" data-date="' + esc(e.workDate) + '">' + (flagged ? '✎ Change asked: ' + esc(flagged.issue || '') + ' (edit)' : 'Ask for a change') + '</button>';
       }
       h += '</article>';
     });
@@ -1328,12 +1343,12 @@
     if (c.canRequest && !m.busy) {
       if (m.reporting || nFlags) {
         h += '<label class="field mt4">Anything else? (optional)<textarea id="supGeneral" class="textarea" rows="2" maxlength="1000" data-supfield="general" placeholder="A note about the whole timecard">' + esc(m.general) + '</textarea></label>';
-      } else h += '<button class="link mt4" data-act="supReportOther">Report a problem that isn’t about one day</button>';
+      } else h += '<button class="btn btn-sm sup-ask mt4" data-act="supReportOther">Ask for a change to the whole timecard</button>';
     }
     h += alertHtml(m.err);
     if (c.canRequest && (nFlags || m.general.trim())) {
       h += '<p class="small mt4">' + esc((c.participant || {}).name) + ' will get an email and must fix it and sign again. You can’t sign until then.</p>' +
-        '<div class="btn-row"><button class="btn" data-act="supCancelReport"' + (m.busy ? ' disabled' : '') + '>Cancel</button><button class="btn btn-primary" data-act="supSendReport"' + (m.busy ? ' disabled' : '') + '>' + (m.busy ? 'Sending…' : 'Send change request') + '</button></div>';
+        '<div class="btn-row"><button class="btn" data-act="supCancelReport"' + (m.busy ? ' disabled' : '') + '>Cancel</button><button class="btn btn-primary" data-act="supSendReport"' + (m.busy ? ' disabled' : '') + '>' + (m.busy ? 'Sending… (a few seconds)' : 'Send change request') + '</button></div>';
     } else if (c.canSign) {
       h += '<div class="btn-row"><button class="btn" data-act="closeModal">Close</button><button class="btn btn-go" data-act="supToEval">Hours are correct</button></div>';
     } else h += '<div class="btn-row"><button class="btn" data-act="closeModal">Close</button><span></span></div>';
@@ -1429,7 +1444,7 @@
     switch (a) {
       case 'supRefresh': loadSupList(true); return true;
       case 'supHist': loadSupHistory(); return true;
-      case 'supOpen': openSupCard(el.getAttribute('data-code'), el.getAttribute('data-start')); return true;
+      case 'supOpen': openSupCard(el.getAttribute('data-code'), el.getAttribute('data-start'), el.getAttribute('data-name')); return true;
       case 'supFlag': if (m) { m.flagOpen = el.getAttribute('data-date'); m.flags[m.flagOpen] = m.flags[m.flagOpen] || { issue: '', note: '' }; m.err = ''; render(); } return true;
       case 'supUnflag': if (m) { delete m.flags[el.getAttribute('data-date')]; m.flagOpen = ''; render(); } return true;
       case 'supFlagDone': if (m) { m.flagOpen = ''; render(); } return true;

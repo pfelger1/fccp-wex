@@ -252,3 +252,12 @@ details.srow summary::-webkit-details-marker { display: none; }
 .sup-ratings { display: grid; gap: 10px; }
 .sup-rate { min-height: 52px; font-size: 17px; }
 .sup-rate.on { background: var(--green); border-color: var(--green); color: #fff; }
+/* 2026-10-26: clear buttons on lists; supervisor notes on flagged days */
+.sup-go { flex: none; display: inline-flex; align-items: center; min-height: 40px; padding: 0 16px; border-radius: 999px; border: 1.5px solid var(--ink); color: var(--ink); font-weight: 700; font-size: 15px; background: #fff; }
+.sup-go.on { background: var(--ink); color: #fff; }
+.st-amber { color: var(--act); } .st-blue { color: var(--info); } .st-green { color: var(--ok); }
+.srow-fix { display: block; width: 100%; margin: 6px 0 10px; }
+.btn-sm { min-height: 40px; font-size: 15px; padding: 8px 14px; }
+.srow-flag { border-color: var(--gold) !important; background: #fffdf3; }
+.sup-note { background: var(--act-bg); border: 1px solid var(--act-line); border-radius: 12px; padding: 10px 12px; margin: 6px 0 0; font-size: 14px; }
+.sup-ask { display: block; width: 100%; border: 1.5px solid var(--act-line); background: var(--act-bg); color: var(--act); font-weight: 700; }
