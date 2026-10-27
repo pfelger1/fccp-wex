@@ -185,7 +185,7 @@
   // ---------------------------------------------------------------- API
   function api(body) {
     var ctrl = new AbortController();
-    var timer = setTimeout(function () { ctrl.abort(); }, (body.action === 'timecardReview' || body.action === 'submitTimecard') ? 90000 : 25000); // 2026-10-26: signing can take longer than 25 seconds
+    var timer = setTimeout(function () { ctrl.abort(); }, (body.action === 'timecardReview' || body.action === 'submitTimecard' || body.action === 'addMissedShift' || body.action === 'editShift' || /^sup/.test(body.action)) ? 90000 : 25000); // 2026-10-26: signing can take longer than 25 seconds; 2026-10-27: also supervisor actions, add missed shift, fix a shift
     return fetch(API_URL, {
       method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify(body), redirect: 'follow', signal: ctrl.signal
@@ -533,7 +533,14 @@
       m.step = 'done'; m.doneText = x.r.message || 'Your timecard has been updated.';   // fix 4
       render();
       return refreshAll().then(function () { return wait(2500); }).then(function () { if (S.modal === m) S.modal = null; });
-    }).catch(function (e) { m.err = e.message || 'Unable to add this shift.'; })
+    }).catch(function (e) {
+      // 2026-10-27: no answer - check whether the shift saved before showing an error (a second try would be refused as an overlap).
+      if (m.step === 'done') return;
+      return confirmSaved(function () { return shiftSaved(f.workDate, f.startTime, f.endTime); }).then(function (ok) {
+        if (ok) { m.step = 'done'; m.doneText = 'Your timecard has been updated.'; render(); return refreshAll().then(function () { return wait(2500); }).then(function () { if (S.modal === m) S.modal = null; }); }
+        m.err = /did not respond|Unable to connect/.test(e.message || '') ? 'We couldn’t confirm it saved. Check My Hours before adding it again.' : (e.message || 'Unable to add this shift.');
+      });
+    })
       .finally(function () { m.busy = false; render(); });
   }
   function openEdit(punchId) {
@@ -563,7 +570,14 @@
       m.step = 'done'; m.doneText = x.r.message || 'Your timesheet has been updated.';
       render();
       return refreshAll().then(function () { return wait(1500); }).then(function () { if (S.modal === m) S.modal = null; });
-    }).catch(function (e) { m.err = e.message || 'Unable to save this correction.'; })
+    }).catch(function (e) {
+      // 2026-10-27: no answer - check whether the fix saved before showing an error.
+      if (m.step === 'done') return;
+      return confirmSaved(function () { return shiftSaved(m.shift.workDate, f.startTime, f.endTime); }).then(function (ok) {
+        if (ok) { m.step = 'done'; m.doneText = 'Your timesheet has been updated.'; render(); return refreshAll().then(function () { return wait(1500); }).then(function () { if (S.modal === m) S.modal = null; }); }
+        m.err = /did not respond|Unable to connect/.test(e.message || '') ? 'We couldn’t confirm it saved. Check My Hours before fixing it again.' : (e.message || 'Unable to save this correction.');
+      });
+    })
       .finally(function () { m.busy = false; render(); });
   }
   function openSubmit() {
@@ -602,14 +616,34 @@
     }).catch(function () {
       // The answer may have been lost after the card was saved; check before asking to try again.
       // 2026-10-26: check the pay period being signed (it can be an earlier one), not today's pay period.
-      return api({ action: 'timecardReview', token: S.token }).then(function (x) {
-        var c = x.r && x.r.closure;
-        if (c && c.status === 'Submitted' && Date.parse(c.submittedAt || '') >= sentAt - 120000) { S.closedLocal = true; m.step = 'done'; m.busy = false; render(); return refreshAll().then(function () { return wait(2000); }).then(function () { if (S.modal === m) S.modal = null; render(); }); }
-        throw new Error();
-      }).catch(function () { m.err = 'The timekeeping service did not respond. Please try again.'; m.busy = false; render(); });
+      // 2026-10-27: check up to 3 times (about 10 seconds apart) before showing an error.
+      return confirmSaved(function () {
+        return api({ action: 'timecardReview', token: S.token }).then(function (x) {
+          var c = x.r && x.r.closure;
+          return !!(c && c.status === 'Submitted' && Date.parse(c.submittedAt || '') >= sentAt - 120000);
+        });
+      }).then(function (ok) {
+        if (ok) { S.closedLocal = true; m.step = 'done'; m.busy = false; render(); return refreshAll().then(function () { return wait(2000); }).then(function () { if (S.modal === m) S.modal = null; render(); }); }
+        m.err = 'We couldn’t confirm your timecard was signed. Close this and check your Timecard tab before signing again.'; m.busy = false; render();
+      });
     });
   }
   function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  // 2026-10-27: after no answer, check up to 3 times (about 10 seconds apart) whether it saved. check() resolves true when it did.
+  function confirmSaved(check) {
+    var n = 0;
+    function next() {
+      n++;
+      return wait(10000).then(check).catch(function () { return false; }).then(function (ok) { return ok ? true : (n < 3 ? next() : false); });
+    }
+    return next();
+  }
+  // 2026-10-27: is there a shift on this date with these clock-in and clock-out times?
+  function shiftSaved(workDate, startTime, endTime) {
+    return api({ action: 'shiftHistory', token: S.token }).then(function (x) {
+      return ((x.r && x.r.shifts) || []).some(function (e) { return String(e.workDate) === String(workDate) && to24(e.startTime) === startTime && to24(e.endTime) === endTime; });
+    });
+  }
 
   // ---------------------------------------------------------------- time picker (hour / minute / AM-PM)
   // AM/PM is guessed from the earlier times in the same shift until the person picks it themselves.
@@ -1343,7 +1377,7 @@
     if (c.canRequest && !m.busy) {
       if (m.reporting || nFlags) {
         h += '<label class="field mt4">Anything else? (optional)<textarea id="supGeneral" class="textarea" rows="2" maxlength="1000" data-supfield="general" placeholder="A note about the whole timecard">' + esc(m.general) + '</textarea></label>';
-      } else h += '<button class="btn btn-sm sup-ask mt4" data-act="supReportOther">Ask for a change to the whole timecard</button>';
+      } else h += '<button class="btn btn-sm sup-ask mt4" data-act="supReportOther">Something else is wrong (like a missing day)</button>';
     }
     h += alertHtml(m.err);
     if (c.canRequest && (nFlags || m.general.trim())) {
@@ -1410,7 +1444,7 @@
     var m = S.modal; if (!m || m.busy || !m.signed) return;
     var dataUrl = supCrop(); if (!dataUrl) { m.signed = false; m.err = 'Please draw your signature.'; return render(); }
     m.busy = true; m.err = ''; renderSubmitButtons();
-    var sentAt = Date.now(), body = { action: 'supSign', token: S.token, participantCode: m.code, fingerprint: m.card.fingerprint, evaluation: m.answers, comments: m.comments, signatureDataUrl: dataUrl };
+    var sentAt = Date.now(), body = { action: 'supSign', token: S.token, participantCode: m.code, start: (m.card.payPeriod || {}).start, fingerprint: m.card.fingerprint, evaluation: m.answers, comments: m.comments, signatureDataUrl: dataUrl };
     var finish = function (r) { m.result = r; m.step = 'done'; m.busy = false; render(); loadSupList(false); };
     api(body).then(function (x) {
       if (isExpired(x.resp, x.r)) { expired(); return; }
@@ -1419,11 +1453,17 @@
       finish(x.r);
     }).catch(function () {
       // The answer may have been lost after it was saved: check before asking to try again.
-      return api({ action: 'supTimecard', token: S.token, participantCode: m.code }).then(function (x) {
-        var so = x.r && x.r.signoff;
-        if (so && Date.parse(so.at || '') >= sentAt - 120000) return finish({ ok: true, signedBy: so.by, signedAt: so.at, already: so.by !== (S.participant || {}).name });
-        throw new Error();
-      }).catch(function () { m.err = 'The timekeeping service did not respond. Please try again.'; m.busy = false; render(); });
+      // 2026-10-27: check up to 3 times (about 10 seconds apart) before showing an error.
+      var so = null;
+      return confirmSaved(function () {
+        return api({ action: 'supTimecard', token: S.token, participantCode: m.code }).then(function (x) {
+          so = x.r && x.r.signoff;
+          return !!(so && Date.parse(so.at || '') >= sentAt - 120000);
+        });
+      }).then(function (ok) {
+        if (ok) return finish({ ok: true, signedBy: so.by, signedAt: so.at, already: so.by !== (S.participant || {}).name });
+        m.err = 'We couldn’t confirm it went through. Tap Refresh to check before signing again.'; m.busy = false; render();
+      });
     });
   }
   function supSendReport() {
@@ -1436,7 +1476,15 @@
       if (isExpired(x.resp, x.r)) { expired(); return; }
       if (x.r.ok !== true) { m.err = errText(x.r, 'Unable to send.'); return; }
       m.step = 'sent'; m.sentMsg = x.r.message || 'Sent.'; loadSupList(false);
-    }).catch(function () { m.err = 'The timekeeping service did not respond. Check your list before sending again.'; })
+    }).catch(function () {
+      // 2026-10-27: no answer - check up to 3 times whether the request arrived before showing an error.
+      return confirmSaved(function () {
+        return api({ action: 'supTimecard', token: S.token, participantCode: m.code }).then(function (x) { return ((x.r && x.r.requests) || []).length > 0; });
+      }).then(function (ok) {
+        if (ok) { m.step = 'sent'; m.sentMsg = 'Sent.'; loadSupList(false); return; }
+        m.err = 'We couldn’t confirm it went through. Tap Refresh to check before sending again.';
+      });
+    })
       .finally(function () { m.busy = false; render(); });
   }
   function onSupAct(a, el) {
