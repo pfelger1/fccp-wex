@@ -1409,6 +1409,7 @@
     var c = m.card, pt = c.participant || {}, pp = c.payPeriod || {};
     return supCardHead(m) + '<div class="panel small mt4"><p>I reviewed ' + esc(pt.name) + '’s hours for ' + esc(fmtMDY(pp.start)) + ' to ' + esc(fmtMDY(pp.end)) + ' (total ' + (hrs((c.totals || {}).countableHours) || '0.00') + ' hours).</p>' +
       '<p class="mt3">I certify that the training has been provided in accordance with the provisions in the Sacramento Works for Youth Worksite Agreement.</p></div>' +
+      (c.needPhone ? '<label class="field mt4">Your work phone<input id="supPhone" class="input" type="tel" inputmode="tel" autocomplete="tel" maxlength="20" data-supfield="phone" value="' + esc(m.phone || '') + '" placeholder="(916) 555-1234"></label><p class="xs muted mt1">It goes on the timesheet and is saved, so you’re only asked once.</p>' : '') + // 2026-10-27
       '<p class="xs muted mt4 turn-tip">Tip: turn your phone sideways for a bigger signing box.</p>' +
       '<canvas id="sig" class="sig" aria-label="Draw your signature"></canvas><button class="btn btn-inline mt3" data-act="clearSig">Clear Signature</button>' + alertHtml(m.err) +
       '<div class="btn-row" id="sigButtons">' + sigButtons(m) + '</div>';
@@ -1443,8 +1444,9 @@
   function supSign() {
     var m = S.modal; if (!m || m.busy || !m.signed) return;
     var dataUrl = supCrop(); if (!dataUrl) { m.signed = false; m.err = 'Please draw your signature.'; return render(); }
+    if (m.card.needPhone && String(m.phone || '').replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '').length !== 10) { m.err = 'Please enter your 10-digit work phone number.'; return render(); } // 2026-10-27
     m.busy = true; m.err = ''; renderSubmitButtons();
-    var sentAt = Date.now(), body = { action: 'supSign', token: S.token, participantCode: m.code, start: (m.card.payPeriod || {}).start, fingerprint: m.card.fingerprint, evaluation: m.answers, comments: m.comments, signatureDataUrl: dataUrl };
+    var sentAt = Date.now(), body = { action: 'supSign', token: S.token, participantCode: m.code, start: (m.card.payPeriod || {}).start, fingerprint: m.card.fingerprint, evaluation: m.answers, comments: m.comments, workPhone: m.phone || '', signatureDataUrl: dataUrl };
     var finish = function (r) { m.result = r; m.step = 'done'; m.busy = false; render(); loadSupList(false); };
     api(body).then(function (x) {
       if (isExpired(x.resp, x.r)) { expired(); return; }
@@ -1526,6 +1528,7 @@
     if (f === 'note') { var d = t.getAttribute('data-date'); m.flags[d] = m.flags[d] || {}; m.flags[d].note = t.value; }
     else if (f === 'general') { var had = !!m.general.trim(); m.general = t.value; if (had !== !!m.general.trim()) render(); }
     else if (f === 'comments') m.comments = t.value;
+    else if (f === 'phone') m.phone = t.value; // 2026-10-27
   });
   app.addEventListener('change', function (e) {
     var t = e.target, f = t.getAttribute && t.getAttribute('data-supfield'), m = S.modal;
