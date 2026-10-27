@@ -244,3 +244,11 @@ details.srow summary::-webkit-details-marker { display: none; }
   canvas.sig { height: max(140px, calc(100vh - 190px)); margin-top: 12px; }
 }
 
+
+/* 2026-10-26: worksite supervisor screens */
+.sup-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; text-align: left; background: #fff; border: 1px solid var(--line-soft); border-radius: 14px; padding: 12px 14px; margin-top: 10px; cursor: pointer; font: inherit; color: inherit; }
+.sup-row:hover { border-color: var(--green); }
+.sup-row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sup-ratings { display: grid; gap: 10px; }
+.sup-rate { min-height: 52px; font-size: 17px; }
+.sup-rate.on { background: var(--green); border-color: var(--green); color: #fff; }

@@ -241,6 +241,7 @@
   // ---------------------------------------------------------------- session
   function resetTo(view, msg) {
     sDel('sessionStorage', TOKEN_KEY);
+    sDel('sessionStorage', SUP_ROLE_KEY); SUP.list = null; SUP.hist = []; SUP.histShown = false; SUP.histOffset = 0; SUP.error = ''; // 2026-10-26
     statusSeq++;
     S.token = ''; S.participant = null; S.status = null; S.statusLoaded = false; S.statusFailed = false; S.closedLocal = false;
     S.shifts = []; S.shiftsPeriod = null; S.shiftsLoaded = false; S.shiftsError = '';
@@ -254,6 +255,7 @@
   function expired() { resetTo('login', SESSION_EXPIRED); }
 
   function startSession(token, participant) {
+    if (isSupSession(participant)) return startSupSession(token, participant); // 2026-10-26: supervisors get their own screen
     sSet('sessionStorage', TOKEN_KEY, token);
     S.token = token; S.participant = participant; S.status = null; S.statusLoaded = false; S.statusFailed = false; S.closedLocal = false;
     S.view = 'home'; S.pin = ''; S.pin2 = ''; S.error = '';
@@ -662,6 +664,7 @@
     else if (S.view === 'activate') html = renderActivate();
     else if (S.view === 'login') html = renderLogin();
     else if (S.view === 'forgot') html = renderForgot();
+    else if (S.view === 'sup') html = renderSup(); // 2026-10-26: supervisors
     else html = renderHome();
     var openKeys = {}; Array.prototype.forEach.call(app.querySelectorAll('details[open][data-key]'), function (d) { openKeys[d.getAttribute('data-key')] = 1; });
     // 2026-10-26: keep the pop-up window's scroll spot when it redraws (checking a box no longer jumps to the top).
@@ -681,6 +684,7 @@
         '<button type="button" class="btn btn-primary mt3" data-act="deviceLogin"' + (b ? ' disabled' : '') + '>' + (b === 'deviceLogin' ? 'Checking device…' : 'Sign in with Face ID / fingerprint') + '</button>' +
         '<p class="small muted mt3" style="text-align:center">Or sign in with your PIN below</p></div>' : '') +
       '<label class="field mt8">Participant code<input id="code" class="input" data-model="code" value="' + esc(S.code) + '" autocomplete="username" enterkeyhint="next"></label>' +
+      '<p class="xs muted mt1">Worksite supervisors: enter your Supervisor Code (starts with SUP).</p>' + // 2026-10-26
       '<button type="button" class="link mt2" data-act="otherParticipant"' + (b ? ' disabled' : '') + '>Use a different participant</button>' +
       '<label class="field">4-digit PIN<input id="pin" class="input pin" data-model="pin" value="' + esc(S.pin) + '" inputmode="numeric" maxlength="4" type="password" autocomplete="current-password" enterkeyhint="go"></label>' +
       alertHtml(S.error || S.bioMsg) +
@@ -725,6 +729,7 @@
       (rs && S.notice ? '<p class="info-note">' + esc(S.notice) + '</p>' : '') + (rs ? '' : installCard(false)) +
       '<form data-form="activate" class="mt4">' +
       '<label class="field">Participant code<input id="code" class="input" data-model="code" value="' + esc(S.code) + '" placeholder="Participant code" autocomplete="username"></label>' +
+      '<p class="xs muted" style="margin-top:-6px">Supervisors: use your Supervisor Code (starts with SUP).</p>' + // 2026-10-26
       '<label class="field">' + (rs ? 'PIN reset code (from your email)' : 'One-time activation code') + '<input id="act" class="input" data-model="activation" value="' + esc(S.activation) + '" inputmode="numeric" maxlength="6" placeholder="Six digits" autocomplete="one-time-code"></label>' +
       '<label class="field">' + (rs ? 'New 4-digit PIN' : 'Create 4-digit PIN') + '<input id="pin" class="input pin" data-model="pin" value="' + esc(S.pin) + '" inputmode="numeric" maxlength="4" type="password" placeholder="••••" autocomplete="new-password"></label>' +
       '<label class="field">Confirm PIN<input id="pin2" class="input pin" data-model="pin2" value="' + esc(S.pin2) + '" inputmode="numeric" maxlength="4" type="password" placeholder="••••" autocomplete="new-password"></label>' +
@@ -794,7 +799,7 @@
     if (bal.hoursRemaining != null && Number(bal.hoursRemaining) === 0) return { tone: 'red', text: 'You have no WEX hours left. Talk to FCCP staff before you work again.' };
     if (meal === 'TAKE_LUNCH_NOW') return { tone: 'red', text: 'Take your lunch now. Tap Start Lunch.' };
     if (forgot) return { tone: 'amber', text: 'You forgot to clock out on ' + fmtShort(forgot.workDate) + '. Tap here to add your clock-out time.', edit: forgot.punchId };
-    if (tc.status === 'Reopened') return { tone: 'amber', text: 'FCCP reopened your timecard. Tap here to review and sign it again.', tab: 'timecard' };
+    if (tc.status === 'Reopened') return { tone: 'amber', text: (/^Your supervisor asked/.test(tc.reopenReason || '') ? 'Your supervisor asked for a change. Tap here to see it, fix it, and sign again.' : 'FCCP reopened your timecard. Tap here to review and sign it again.'), tab: 'timecard' }; // 2026-10-26
     if (unsigned && !closed) return { tone: 'amber', text: 'Your timecard for ' + fmtMDY(unsigned.start) + ' to ' + fmtMDY(unsigned.end) + ' still needs your signature. Tap here.', tab: 'timecard' };
     if (meal === 'LUNCH_DUE_SOON') return { tone: 'amber', text: 'Lunch is due soon. Start a 30-minute lunch before you reach 5 hours.' };
     var early = earlyPrompt();
@@ -949,7 +954,8 @@
   function renderTimecardTab() {
     var st = S.status || {}, tc = st.timecard || {}, closed = isClosed();
     var h = '<section class="section tone-card">';
-    if (tc.status === 'Reopened') h += '<div class="callout tone-amber"><p class="strong">FCCP reopened your timecard</p><p class="small mt1">Check your shifts, fix anything needed, and sign it again.</p>' + (tc.reopenReason ? '<p class="small mt2"><b>Reason:</b> ' + esc(tc.reopenReason) + '</p>' : '') + '</div>';
+    if (tc.status === 'Reopened' && /^Your supervisor asked/.test(tc.reopenReason || '')) h += '<div class="callout tone-amber"><p class="strong">Your supervisor asked for a change</p><p class="small mt1">' + esc(String(tc.reopenReason).replace(/^Your supervisor asked for a change: /, '')) + '</p><p class="small mt2">Fix the shift on My Hours, then sign again. If the hours are right, you can sign again without changes.</p></div>'; // 2026-10-26
+    else if (tc.status === 'Reopened') h += '<div class="callout tone-amber"><p class="strong">FCCP reopened your timecard</p><p class="small mt1">Check your shifts, fix anything needed, and sign it again.</p>' + (tc.reopenReason ? '<p class="small mt2"><b>Reason:</b> ' + esc(tc.reopenReason) + '</p>' : '') + '</div>';
     if (closed) {
       h += stepsHtml(3) + '<div class="callout tone-green"><p class="strong">Signed ✓</p>' + (tc.submittedAt ? '<p class="small mt1">Submitted ' + esc(fmtStamp(tc.submittedAt)) + '</p>' : '') + '<p class="small mt1">Your timecard is closed for this pay period. Contact FCCP staff if a correction is needed.</p></div>';
     } else {
@@ -1026,8 +1032,8 @@
   // ---------------------------------------------------------------- modals render
   function renderModal() {
     var m = S.modal; if (!m) return '';
-    var inner = m.kind === 'sick' ? sickHtml(m) : m.kind === 'missed' ? missedHtml(m) : m.kind === 'edit' ? editHtml(m) : submitHtml(m);
-    return '<div class="overlay" data-overlay="1"><section role="dialog" aria-modal="true" class="dialog' + (m.kind === 'submit' ? ' wide' : '') + '">' + inner + '</section></div>';
+    var inner = m.kind === 'sick' ? sickHtml(m) : m.kind === 'missed' ? missedHtml(m) : m.kind === 'edit' ? editHtml(m) : m.kind === 'sup' ? supHtml(m) : submitHtml(m);
+    return '<div class="overlay" data-overlay="1"><section role="dialog" aria-modal="true" class="dialog' + (m.kind === 'submit' || m.kind === 'sup' ? ' wide' : '') + '">' + inner + '</section></div>';
   }
   function reasonSelect(list, value, label) {
     return '<label class="field">' + label + '<select class="select" data-mfield="reason"><option value="" disabled' + (value ? '' : ' selected') + '>Select a reason</option>' +
@@ -1099,10 +1105,12 @@
         '<div><dt>Regular hours</dt><dd>' + (hrs(t.regularHours) || '—') + '</dd></div><div><dt>Sick hours</dt><dd>' + (hrs(t.sickHours) || '—') + '</dd></div>' +
         '<div><dt>Meal premium hours</dt><dd>' + (hrs(t.mealPremiumHours) || '—') + '</dd></div><div><dt>Total countable hours</dt><dd>' + (hrs(total) || '—') + '</dd></div></dl></div>' +
         '<h3 class="h2 mt5">Shifts this pay period</h3>';
+      var asked = rv.changeRequests || []; // 2026-10-26: days the supervisor flagged
+      if (asked.length) h += '<div class="callout tone-amber mt3"><p class="strong">Your supervisor asked for a change</p>' + asked.map(function (r) { return '<p class="small mt1">' + (r.workDate ? esc(fmtShort(r.workDate)) + ' – ' : '') + esc(r.issue) + ': ' + esc(r.note) + '</p>'; }).join('') + '</div>';
       var sh = (rv.shifts || rv.completedShifts || []).slice().sort(function (a, b) { return dayNum(b.workDate) - dayNum(a.workDate) || to24(b.startTime).localeCompare(to24(a.startTime)); });
       if (!sh.length) h += '<p class="small muted mt2">No completed shifts were returned for this pay period.</p>';
       sh.forEach(function (e) {
-        h += '<article class="shift"><p class="strong">' + esc(fmtShort(e.workDate)) + '</p><dl class="times"><div><dt>Clock In</dt><dd>' + fmtTime(e.startTime) + '</dd></div>' +
+        h += '<article class="shift' + (asked.some(function (r) { return r.workDate === e.workDate; }) ? ' shift-held' : '') + '"><p class="strong">' + esc(fmtShort(e.workDate)) + '</p><dl class="times"><div><dt>Clock In</dt><dd>' + fmtTime(e.startTime) + '</dd></div>' +
           (e.lunchOut || e.lunchIn ? '<div><dt>Lunch Out</dt><dd>' + fmtTime(e.lunchOut) + '</dd></div><div><dt>Lunch In</dt><dd>' + fmtTime(e.lunchIn) + '</dd></div>' : '') +
           '<div><dt>Clock Out</dt><dd>' + fmtTime(e.endTime) + '</dd></div><div><dt>Type</dt><dd>' + esc(typeLabel(e.type) || '—') + '</dd></div><div><dt>Worked hours</dt><dd>' + (hrs(e.hours != null ? e.hours : e.workedHours) || '—') + '</dd></div>' +
           (Number(e.mealPremiumHours) > 0 ? '<div><dt>Meal premium hours</dt><dd>' + hrs(e.mealPremiumHours) + '</dd></div>' : '') + '</dl></article>';
@@ -1117,6 +1125,7 @@
     return h;
   }
   function sigButtons(m) {
+    if (m.kind === 'sup') return '<button class="btn" data-act="supSignBack"' + (m.busy ? ' disabled' : '') + '>Go Back</button><button class="btn btn-primary" data-act="supSign"' + (!m.signed || m.busy ? ' disabled' : '') + '>' + (m.busy ? 'Signing…' : 'Sign Timecard') + '</button>'; // 2026-10-26
     return '<button class="btn" data-act="sigBack"' + (m.busy ? ' disabled' : '') + '>Go Back</button><button class="btn btn-primary" data-act="sigSubmit"' + (!m.signed || m.busy ? ' disabled' : '') + '>' + (m.busy ? 'Submitting signed timecard...' : 'Submit Signed Timecard') + '</button>';
   }
   function renderSubmitButtons() { var el = document.getElementById('sigButtons'); if (el && S.modal) el.innerHTML = sigButtons(S.modal); }
@@ -1163,6 +1172,284 @@
     if (S.modal) { S.modal.signed = false; S.modal.err = ''; renderSubmitButtons(); }
   }
 
+
+  // ================================================================ 2026-10-26: worksite supervisors
+  // A SUP- code signs in to the same app and sees this screen instead of a timesheet.
+  function isSupCode(c) { return /^SUP-\d+$/i.test(String(c || '').trim()); }
+  function isSupSession(p) { return !!p && (p.role === 'supervisor' || isSupCode(p.code)); }
+  var SUP_ROLE_KEY = 'wex-role';
+  var SUP = { list: null, loading: false, error: '', hist: [], histMore: false, histOffset: 0, histLoading: false, histShown: false };
+  function startSupSession(token, participant) {
+    sSet('sessionStorage', TOKEN_KEY, token); sSet('sessionStorage', SUP_ROLE_KEY, 'sup');
+    S.token = token; S.participant = participant; S.view = 'sup'; S.pin = ''; S.pin2 = ''; S.error = '';
+    SUP.list = null; SUP.hist = []; SUP.histShown = false; SUP.histOffset = 0;
+    render();
+    return loadSupList(true).then(function () { return true; });
+  }
+  function loadSupList(showBusy) {
+    if (showBusy) { SUP.loading = true; render(); }
+    return api({ action: 'supList', token: S.token }).then(function (x) {
+      if (isExpired(x.resp, x.r)) { expired(); return; }
+      if (x.r.ok !== true) { SUP.error = errText(x.r, 'Unable to load your list.'); return; }
+      SUP.list = x.r; SUP.error = '';
+      if (x.r.supervisor) S.participant = Object.assign({}, S.participant || {}, { name: x.r.supervisor.name, code: x.r.supervisor.code, role: 'supervisor' });
+    }).catch(function (e) { SUP.error = e.message || 'Unable to load your list.'; })
+      .finally(function () { SUP.loading = false; render(); });
+  }
+  function loadSupHistory() {
+    SUP.histLoading = true; SUP.histShown = true; render();
+    api({ action: 'supHistory', token: S.token, offset: SUP.histOffset }).then(function (x) {
+      if (isExpired(x.resp, x.r)) { expired(); return; }
+      if (x.r.ok !== true) { SUP.error = errText(x.r, 'Unable to load earlier pay periods.'); return; }
+      SUP.hist = SUP.hist.concat(x.r.periods || []); SUP.histMore = !!x.r.more; SUP.histOffset = x.r.nextOffset || 0;
+    }).catch(function (e) { SUP.error = e.message || 'Unable to load earlier pay periods.'; })
+      .finally(function () { SUP.histLoading = false; render(); });
+  }
+  function supWhen(iso) { return iso ? fmtStamp(iso) : ''; }
+  function supRow(p) {
+    var pill = { ready: ['pill-amber', 'Ready for you'], change: ['pill-blue', 'Change requested'], waiting: ['pill-blue', 'Waiting on WEX'], done: ['pill-green', '✓ Signed'] }[p.state] || ['pill-blue', ''];
+    var sub = p.state === 'done' ? 'Signed by ' + esc(p.signedBy || '') + (p.signedAt ? ' · ' + esc(supWhen(p.signedAt)) : '') : esc(p.note || '');
+    return '<button class="sup-row" data-act="supOpen" data-code="' + esc(p.code) + '"><span class="sup-row-main"><span class="strong">' + esc(p.name) + '</span>' +
+      '<span class="small muted">' + esc(fmtMDY(p.payPeriod && p.payPeriod.start)) + ' to ' + esc(fmtMDY(p.payPeriod && p.payPeriod.end)) + ((SUP.list.supervisor.worksites || []).length > 1 ? ' · ' + esc(p.worksite) : '') + '</span>' +
+      (sub ? '<span class="xs muted">' + sub + '</span>' : '') + '</span><span class="pill ' + pill[0] + '">' + pill[1] + '</span></button>';
+  }
+  function renderSup() {
+    var p = S.participant || {}, b = S.busy, L = SUP.list;
+    var h = '<header class="topbar"><div class="topbar-inner">' + brand(esc(p.name || 'Supervisor') + ' · Supervisor') +
+      '<button class="link" data-act="logout"' + (b ? ' disabled' : '') + '>' + (b === 'logout' ? 'Signing out…' : 'Sign out') + '</button></div></header><div class="wrap">';
+    if (!L) h += SUP.error ? alertHtml(SUP.error) + '<button class="btn mt4" data-act="supRefresh">Try again</button>' : '<p class="loading-text mt6">Loading your WEX…</p>';
+    else {
+      var sites = (L.supervisor.worksites || []).join(' and ');
+      h += '<section class="section tone-card"><h1 class="h2">Your WEX timecards</h1><p class="small muted mt1">' + esc(sites) + '</p>';
+      if (!L.enabled) h += '<div class="callout tone-amber mt4"><p class="strong">Sign-off isn’t turned on yet</p><p class="small mt1">FCCP will let you know when to start signing timecards here. You can look around in the meantime.</p></div>';
+      else h += '<p class="small mt3">Review each timecard after the WEX signs it. Due by <b>noon on the Monday</b> after the pay period ends. If more than one supervisor is at your worksite, only one of you needs to sign.</p>';
+      h += '<button class="link mt3" data-act="supRefresh"' + (SUP.loading ? ' disabled' : '') + '>' + (SUP.loading ? 'Refreshing…' : 'Refresh') + '</button></section>';
+      if (SUP.error) h += alertHtml(SUP.error);
+      var groups = [['ready', 'Ready for you'], ['change', 'Change requested'], ['waiting', 'Waiting on participant'], ['done', 'Done']];
+      var any = false;
+      groups.forEach(function (g) {
+        var list = (L.participants || []).filter(function (x) { return x.state === g[0]; });
+        if (!list.length) return; any = true;
+        h += '<section class="section"><h2 class="h3">' + g[1] + ' <span class="muted small">(' + list.length + ')</span></h2>' + list.map(supRow).join('') + '</section>';
+      });
+      if (!any) h += '<section class="section"><p class="small muted">No active WEX participants at your worksite right now.</p></section>';
+      h += '<section class="section"><h2 class="h3">Earlier pay periods</h2>';
+      if (!SUP.histShown) h += '<p class="small muted mt1">Finalized timecards, view only.</p><button class="btn mt3" data-act="supHist">Show earlier pay periods</button>';
+      else {
+        if (!SUP.hist.length && !SUP.histLoading) h += '<p class="small muted mt1">No finalized pay periods yet.</p>';
+        SUP.hist.forEach(function (pp) {
+          h += '<p class="strong mt4">' + esc(fmtMDY(pp.start)) + ' to ' + esc(fmtMDY(pp.end)) + '</p>' + pp.participants.map(function (x) {
+            return '<button class="sup-row" data-act="supOpen" data-code="' + esc(x.code) + '" data-start="' + esc(pp.start) + '"><span class="sup-row-main"><span class="strong">' + esc(x.name) + '</span>' +
+              '<span class="xs muted">' + (x.signedBy ? 'Signed by ' + esc(x.signedBy) + (x.signedAt ? ' · ' + esc(supWhen(x.signedAt)) : '') : 'No supervisor signature') + '</span></span><span class="pill pill-green">Finalized</span></button>';
+          }).join('');
+        });
+        if (SUP.histLoading) h += '<p class="small muted mt3">Loading…</p>';
+        else if (SUP.histMore) h += '<button class="btn mt4" data-act="supHist">Show more</button>';
+      }
+      h += '</section>';
+    }
+    h += '</div>';
+    if (S.toast) h += '<div class="toast" role="status">' + esc(S.toast) + '</div>';
+    return '<main>' + h + '</main>';
+  }
+
+  // ---- one timecard: review -> evaluation (one question per screen) -> comments -> summary -> sign
+  function openSupCard(code, start) {
+    var m = { kind: 'sup', step: 'review', code: code, start: start || '', card: null, loading: true, err: '', busy: false,
+      flags: {}, flagOpen: '', general: '', reporting: false, evalIdx: 0, answers: {}, comments: '', signed: false, result: null };
+    S.modal = m; render();
+    loadSupCard(m);
+  }
+  function loadSupCard(m) {
+    m.loading = true; render();
+    return api({ action: 'supTimecard', token: S.token, participantCode: m.code, start: m.start || undefined }).then(function (x) {
+      if (isExpired(x.resp, x.r)) { expired(); return; }
+      if (x.r.ok !== true) { m.err = errText(x.r, 'Unable to open this timecard.'); return; }
+      m.card = x.r;
+      if (x.r.evaluation && !Object.keys(m.answers).length) { m.answers = Object.assign({}, x.r.evaluation); m.comments = x.r.comments || ''; }
+    }).catch(function (e) { m.err = e.message || 'Unable to open this timecard.'; })
+      .finally(function () { m.loading = false; render(); });
+  }
+  function supCardHead(m) {
+    var c = m.card || {}, pp = c.payPeriod || {}, pt = c.participant || {};
+    return '<p class="small strong green">' + esc(pt.worksite || '') + '</p><h2 class="title" style="font-size:22px">' + esc(pt.name || '') + '</h2>' +
+      '<p class="small muted mt1">Pay period ' + esc(fmtMDY(pp.start)) + ' to ' + esc(fmtMDY(pp.end)) + '</p>';
+  }
+  function supReviewHtml(m) {
+    var c = m.card;
+    if (m.loading && !c) return '<p class="small muted">Loading timecard…</p>';
+    if (!c) return alertHtml(m.err) + '<div class="btn-row"><button class="btn" data-act="closeModal">Close</button><span></span></div>';
+    var t = c.totals || {}, h = supCardHead(m);
+    if (c.signoff) h += '<div class="callout tone-green mt4"><p class="strong">✓ Signed by ' + esc(c.signoff.by) + '</p>' + (c.signoff.at ? '<p class="small mt1">' + esc(supWhen(c.signoff.at)) + '</p>' : '') + '</div>';
+    else if (c.viewOnly) h += '<div class="callout tone-green mt4"><p class="strong">Finalized by FCCP</p><p class="small mt1">View only.</p></div>';
+    else if (!c.canSign && c.cannotSign) h += '<div class="callout tone-amber mt4"><p class="small">' + esc(c.cannotSign) + '</p></div>';
+    if ((c.requests || []).length) h += '<div class="callout tone-amber"><p class="strong">You asked for a change</p>' + c.requests.map(function (r) {
+      return '<p class="small mt1">' + (r.workDate ? esc(fmtShort(r.workDate)) + ' – ' : '') + esc(r.issue) + ': ' + esc(r.note) + '</p>'; }).join('') + '</div>';
+    h += '<div class="panel mt4"><dl class="times"><div><dt>Regular hours</dt><dd>' + (hrs(t.regularHours) || '0.00') + '</dd></div><div><dt>Sick hours</dt><dd>' + (hrs(t.sickHours) || '0.00') + '</dd></div>' +
+      '<div><dt>Meal premium hours</dt><dd>' + (hrs(t.mealPremiumHours) || '0.00') + '</dd></div><div><dt>Total hours</dt><dd>' + (hrs(t.countableHours) || '0.00') + '</dd></div></dl></div>';
+    var sh = (c.shifts || []).slice().sort(function (a, b) { return dayNum(a.workDate) - dayNum(b.workDate) || to24(a.startTime).localeCompare(to24(b.startTime)); });
+    if (!sh.length) h += '<p class="small muted mt4">No shifts this pay period.</p>';
+    var seen = {};
+    sh.forEach(function (e) {
+      var first = !seen[e.workDate]; seen[e.workDate] = 1;
+      var flagged = m.flags[e.workDate], asked = (c.requests || []).some(function (r) { return r.workDate === e.workDate; });
+      h += '<article class="shift' + (flagged || asked ? ' shift-held' : '') + '"><div class="row-between"><p class="strong">' + esc(fmtShort(e.workDate)) + '</p><p class="small strong">' + (hrs(e.workedHours) || '—') + ' hr</p></div>' +
+        '<p class="small mt1">' + fmtTime(e.startTime) + ' – ' + fmtTime(e.endTime) + (e.lunchOut ? ' · lunch ' + fmtTime(e.lunchOut) + ' – ' + fmtTime(e.lunchIn) : '') + '</p>' +
+        '<p class="xs muted mt1">' + esc(typeLabel(e.type) || 'Regular') + (Number(e.mealPremiumHours) > 0 ? ' · +' + hrs(e.mealPremiumHours) + ' meal premium' : '') + '</p>';
+      if (first && c.canRequest && !m.busy) {
+        if (m.flagOpen === e.workDate) {
+          var f = m.flags[e.workDate] || {};
+          h += '<div class="panel mt3"><label class="field">What’s wrong?<select class="select" data-supfield="issue" data-date="' + esc(e.workDate) + '"><option value="">Pick one</option>' +
+            (c.issues || []).map(function (i) { return '<option' + (f.issue === i ? ' selected' : '') + '>' + esc(i) + '</option>'; }).join('') + '</select></label>' +
+            '<label class="field">Note for ' + esc((c.participant || {}).name || 'the WEX') + '<textarea id="supNote-' + esc(e.workDate) + '" class="textarea" rows="2" maxlength="500" data-supfield="note" data-date="' + esc(e.workDate) + '" placeholder="Example: He left at 2, not 4.">' + esc(f.note || '') + '</textarea></label>' +
+            '<div class="btn-row"><button class="btn" data-act="supUnflag" data-date="' + esc(e.workDate) + '">Remove</button><button class="btn btn-primary" data-act="supFlagDone">Done</button></div></div>';
+        } else h += '<button class="link mt2" data-act="supFlag" data-date="' + esc(e.workDate) + '">' + (flagged ? '✎ Problem reported: ' + esc(flagged.issue || '') + ' (change)' : 'Report a problem') + '</button>';
+      }
+      h += '</article>';
+    });
+    var nFlags = Object.keys(m.flags).length;
+    if (c.canRequest && !m.busy) {
+      if (m.reporting || nFlags) {
+        h += '<label class="field mt4">Anything else? (optional)<textarea id="supGeneral" class="textarea" rows="2" maxlength="1000" data-supfield="general" placeholder="A note about the whole timecard">' + esc(m.general) + '</textarea></label>';
+      } else h += '<button class="link mt4" data-act="supReportOther">Report a problem that isn’t about one day</button>';
+    }
+    h += alertHtml(m.err);
+    if (c.canRequest && (nFlags || m.general.trim())) {
+      h += '<p class="small mt4">' + esc((c.participant || {}).name) + ' will get an email and must fix it and sign again. You can’t sign until then.</p>' +
+        '<div class="btn-row"><button class="btn" data-act="supCancelReport"' + (m.busy ? ' disabled' : '') + '>Cancel</button><button class="btn btn-primary" data-act="supSendReport"' + (m.busy ? ' disabled' : '') + '>' + (m.busy ? 'Sending…' : 'Send change request') + '</button></div>';
+    } else if (c.canSign) {
+      h += '<div class="btn-row"><button class="btn" data-act="closeModal">Close</button><button class="btn btn-go" data-act="supToEval">Hours are correct</button></div>';
+    } else h += '<div class="btn-row"><button class="btn" data-act="closeModal">Close</button><span></span></div>';
+    return h;
+  }
+  function supEvalHtml(m) {
+    var c = m.card, items = c.items || [], i = m.evalIdx, item = items[i], cur = m.answers[item] || '', last = c.lastEvaluation && c.lastEvaluation[item];
+    var h = supCardHead(m) + '<p class="small strong mt4">Participant evaluation · ' + (i + 1) + ' of ' + items.length + '</p><h3 class="h2 mt2">' + esc(item) + '</h3>' +
+      (last ? '<p class="xs muted mt1">Last time: ' + esc(last) + '</p>' : '') + '<div class="sup-ratings mt4">' +
+      (c.ratings || []).map(function (r) { return '<button class="btn sup-rate' + (cur === r ? ' on' : '') + '" data-act="supRate" data-val="' + esc(r) + '">' + esc(r) + '</button>'; }).join('') + '</div>' +
+      '<div class="btn-row"><button class="btn" data-act="supEvalBack">Back</button><button class="btn" data-act="supSkip">Skip this one</button></div>';
+    return h;
+  }
+  function supSummaryHtml(m) {
+    var c = m.card, h = supCardHead(m) + '<h3 class="h2 mt4">Check your evaluation</h3><p class="small muted mt1">Tap any line to change it. Skipped lines print blank.</p>';
+    (c.items || []).forEach(function (it, i) {
+      h += '<button class="sup-row" data-act="supGoEval" data-idx="' + i + '"><span class="sup-row-main"><span class="small">' + esc(it) + '</span></span><span class="small strong">' + esc(m.answers[it] || '—') + '</span></button>';
+    });
+    h += '<label class="field mt4">Comments (optional)<textarea id="supComments" class="textarea" rows="3" maxlength="600" data-supfield="comments">' + esc(m.comments) + '</textarea></label>' +
+      '<div class="btn-row"><button class="btn" data-act="supEvalBack">Back</button><button class="btn btn-primary" data-act="supToSign">Continue to signature</button></div>';
+    return h;
+  }
+  function supSignHtml(m) {
+    var c = m.card, pt = c.participant || {}, pp = c.payPeriod || {};
+    return supCardHead(m) + '<div class="panel small mt4"><p>I reviewed ' + esc(pt.name) + '’s hours for ' + esc(fmtMDY(pp.start)) + ' to ' + esc(fmtMDY(pp.end)) + ' (total ' + (hrs((c.totals || {}).countableHours) || '0.00') + ' hours).</p>' +
+      '<p class="mt3">I certify that the training has been provided in accordance with the provisions in the Sacramento Works for Youth Worksite Agreement.</p></div>' +
+      '<p class="xs muted mt4 turn-tip">Tip: turn your phone sideways for a bigger signing box.</p>' +
+      '<canvas id="sig" class="sig" aria-label="Draw your signature"></canvas><button class="btn btn-inline mt3" data-act="clearSig">Clear Signature</button>' + alertHtml(m.err) +
+      '<div class="btn-row" id="sigButtons">' + sigButtons(m) + '</div>';
+  }
+  function supHtml(m) {
+    if (m.step === 'eval') return supEvalHtml(m);
+    if (m.step === 'summary') return supSummaryHtml(m);
+    if (m.step === 'sign') return supSignHtml(m);
+    if (m.step === 'done') {
+      var r = m.result || {};
+      return supCardHead(m) + '<div role="status" class="done"><h2 class="title" style="font-size:22px">' + (r.already ? 'Already signed' : 'Signed ✓') + '</h2>' +
+        '<p class="small mt3">' + (r.already ? 'Signed by ' + esc(r.signedBy) + (r.signedAt ? ' · ' + esc(supWhen(r.signedAt)) : '') + '. You don’t need to sign it again.' : 'Signed electronically in the WEX app · ' + esc(supWhen(r.signedAt))) + '</p></div>' +
+        '<div class="btn-row"><span></span><button class="btn btn-primary" data-act="supDone">Back to my list</button></div>';
+    }
+    if (m.step === 'sent') return supCardHead(m) + '<div role="status" class="done"><h2 class="title" style="font-size:22px">Change request sent</h2><p class="small mt3">' + esc(m.sentMsg || '') + '</p></div>' +
+      '<div class="btn-row"><span></span><button class="btn btn-primary" data-act="supDone">Back to my list</button></div>';
+    return supReviewHtml(m);
+  }
+  function supCrop() {
+    var canvas = document.getElementById('sig'); if (!canvas) return '';
+    var ctx = canvas.getContext('2d'), img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    var minX = canvas.width, minY = canvas.height, maxX = -1, maxY = -1;
+    for (var y = 0; y < canvas.height; y++) for (var x = 0; x < canvas.width; x++) {
+      var i = (y * canvas.width + x) * 4;
+      if (img.data[i] < 245 || img.data[i + 1] < 245 || img.data[i + 2] < 245) { if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; }
+    }
+    if (maxX < minX || maxY < minY) return '';
+    var out = document.createElement('canvas'); out.width = maxX - minX + 17; out.height = maxY - minY + 17;
+    var oc = out.getContext('2d'); oc.fillStyle = '#ffffff'; oc.fillRect(0, 0, out.width, out.height); oc.drawImage(canvas, 8 - minX, 8 - minY);
+    return out.toDataURL('image/png');
+  }
+  function supSign() {
+    var m = S.modal; if (!m || m.busy || !m.signed) return;
+    var dataUrl = supCrop(); if (!dataUrl) { m.signed = false; m.err = 'Please draw your signature.'; return render(); }
+    m.busy = true; m.err = ''; renderSubmitButtons();
+    var sentAt = Date.now(), body = { action: 'supSign', token: S.token, participantCode: m.code, fingerprint: m.card.fingerprint, evaluation: m.answers, comments: m.comments, signatureDataUrl: dataUrl };
+    var finish = function (r) { m.result = r; m.step = 'done'; m.busy = false; render(); loadSupList(false); };
+    api(body).then(function (x) {
+      if (isExpired(x.resp, x.r)) { expired(); return; }
+      if (x.r.changed) { m.busy = false; m.step = 'review'; m.card = null; m.err = x.r.error; loadSupCard(m); return; }
+      if (x.r.ok !== true) { m.err = errText(x.r, 'Unable to sign.'); m.busy = false; render(); return; }
+      finish(x.r);
+    }).catch(function () {
+      // The answer may have been lost after it was saved: check before asking to try again.
+      return api({ action: 'supTimecard', token: S.token, participantCode: m.code }).then(function (x) {
+        var so = x.r && x.r.signoff;
+        if (so && Date.parse(so.at || '') >= sentAt - 120000) return finish({ ok: true, signedBy: so.by, signedAt: so.at, already: so.by !== (S.participant || {}).name });
+        throw new Error();
+      }).catch(function () { m.err = 'The timekeeping service did not respond. Please try again.'; m.busy = false; render(); });
+    });
+  }
+  function supSendReport() {
+    var m = S.modal; if (!m || m.busy) return;
+    var items = Object.keys(m.flags).map(function (d) { return { workDate: d, issue: m.flags[d].issue || '', note: (m.flags[d].note || '').trim() }; });
+    var bad = items.filter(function (x) { return !x.issue || !x.note; })[0];
+    if (bad) { m.err = 'For ' + fmtShort(bad.workDate) + ', pick what’s wrong and add a note.'; m.flagOpen = bad.workDate; return render(); }
+    m.busy = true; m.err = ''; render();
+    api({ action: 'supRequest', token: S.token, participantCode: m.code, fingerprint: m.card.fingerprint, items: items, generalNote: m.general.trim() }).then(function (x) {
+      if (isExpired(x.resp, x.r)) { expired(); return; }
+      if (x.r.ok !== true) { m.err = errText(x.r, 'Unable to send.'); return; }
+      m.step = 'sent'; m.sentMsg = x.r.message || 'Sent.'; loadSupList(false);
+    }).catch(function () { m.err = 'The timekeeping service did not respond. Check your list before sending again.'; })
+      .finally(function () { m.busy = false; render(); });
+  }
+  function onSupAct(a, el) {
+    var m = S.modal;
+    switch (a) {
+      case 'supRefresh': loadSupList(true); return true;
+      case 'supHist': loadSupHistory(); return true;
+      case 'supOpen': openSupCard(el.getAttribute('data-code'), el.getAttribute('data-start')); return true;
+      case 'supFlag': if (m) { m.flagOpen = el.getAttribute('data-date'); m.flags[m.flagOpen] = m.flags[m.flagOpen] || { issue: '', note: '' }; m.err = ''; render(); } return true;
+      case 'supUnflag': if (m) { delete m.flags[el.getAttribute('data-date')]; m.flagOpen = ''; render(); } return true;
+      case 'supFlagDone': if (m) { m.flagOpen = ''; render(); } return true;
+      case 'supReportOther': if (m) { m.reporting = true; render(); } return true;
+      case 'supCancelReport': if (m) { m.flags = {}; m.flagOpen = ''; m.general = ''; m.reporting = false; m.err = ''; render(); } return true;
+      case 'supSendReport': supSendReport(); return true;
+      case 'supToEval': if (m) { m.step = 'eval'; m.evalIdx = 0; m.err = ''; render(); } return true;
+      case 'supRate': if (m) { m.answers[m.card.items[m.evalIdx]] = el.getAttribute('data-val'); supNextEval(m); } return true;
+      case 'supSkip': if (m) { delete m.answers[m.card.items[m.evalIdx]]; supNextEval(m); } return true;
+      case 'supEvalBack': if (m) { if (m.step === 'summary') { m.step = 'eval'; m.evalIdx = m.card.items.length - 1; } else if (m.evalIdx > 0) m.evalIdx--; else m.step = 'review'; render(); } return true;
+      case 'supGoEval': if (m) { m.step = 'eval'; m.evalIdx = Number(el.getAttribute('data-idx')) || 0; m.backToSummary = true; render(); } return true;
+      case 'supToSign': if (m) { m.step = 'sign'; m.signed = false; m.err = ''; render(); } return true;
+      case 'supSignBack': if (m && !m.busy) { m.step = 'summary'; m.err = ''; render(); } return true;
+      case 'supSign': supSign(); return true;
+      case 'supDone': S.modal = null; render(); return true;
+    }
+    return false;
+  }
+  function supNextEval(m) {
+    if (m.backToSummary || m.evalIdx >= m.card.items.length - 1) { m.backToSummary = false; m.step = 'summary'; }
+    else m.evalIdx++;
+    render();
+  }
+  app.addEventListener('input', function (e) {
+    var t = e.target, f = t.getAttribute && t.getAttribute('data-supfield'), m = S.modal;
+    if (!f || !m || m.kind !== 'sup') return;
+    if (f === 'note') { var d = t.getAttribute('data-date'); m.flags[d] = m.flags[d] || {}; m.flags[d].note = t.value; }
+    else if (f === 'general') { var had = !!m.general.trim(); m.general = t.value; if (had !== !!m.general.trim()) render(); }
+    else if (f === 'comments') m.comments = t.value;
+  });
+  app.addEventListener('change', function (e) {
+    var t = e.target, f = t.getAttribute && t.getAttribute('data-supfield'), m = S.modal;
+    if (f !== 'issue' || !m || m.kind !== 'sup') return;
+    var d = t.getAttribute('data-date'); m.flags[d] = m.flags[d] || {}; m.flags[d].issue = t.value; render();
+  });
+  // ================================================================ end supervisors
+
   // ---------------------------------------------------------------- events
   app.addEventListener('input', function (e) {
     var t = e.target, model = t.getAttribute('data-model');
@@ -1203,7 +1490,7 @@
     if (next[id] !== undefined && next[id] !== null) { e.preventDefault(); var n = document.getElementById(next[id]); if (n) n.focus(); }
   });
   app.addEventListener('mousedown', function (e) {
-    if (e.target.getAttribute && e.target.getAttribute('data-overlay') && S.modal && !S.modal.busy && S.modal.kind !== 'sick' && S.modal.kind !== 'missed') { S.modal = null; render(); }
+    if (e.target.getAttribute && e.target.getAttribute('data-overlay') && S.modal && !S.modal.busy && S.modal.kind !== 'sick' && S.modal.kind !== 'missed' && S.modal.kind !== 'sup') { S.modal = null; render(); }
   });
   app.addEventListener('click', function (e) {
     var el = e.target.closest('[data-act],[data-punch],[data-edit],[data-tab]'); if (!el || el.disabled) return;
@@ -1211,6 +1498,7 @@
     if (el.hasAttribute('data-punch')) return doPunch(el.getAttribute('data-punch'));
     if (el.hasAttribute('data-edit')) return openEdit(el.getAttribute('data-edit'));
     var a = el.getAttribute('data-act'), m = S.modal;
+    if (a && a.indexOf('sup') === 0 && onSupAct(a, el)) return; // 2026-10-26: supervisors
     switch (a) {
       case 'toActivate': S.error = ''; S.pin = ''; S.reset = false; S.notice = ''; S.view = 'activate'; render(); break;
       case 'toForgot': S.error = ''; S.pin = ''; S.view = 'forgot'; render(); break;
@@ -1253,7 +1541,8 @@
 
   // ---------------------------------------------------------------- start
   var saved = sGet('sessionStorage', TOKEN_KEY);
-  if (saved) {
+  if (saved && sGet('sessionStorage', SUP_ROLE_KEY) === 'sup') { S.token = saved; S.view = 'sup'; render(); loadSupList(true); } // 2026-10-26
+  else if (saved) {
     S.token = saved; S.view = 'session'; render();
     loadStatus(false).then(function (ok) {
       if (!ok && S.view === 'session') { if (S.token) { S.view = 'home'; render(); } return; }
