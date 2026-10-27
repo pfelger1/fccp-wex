@@ -1178,7 +1178,7 @@
   function isSupCode(c) { return /^SUP-\d+$/i.test(String(c || '').trim()); }
   function isSupSession(p) { return !!p && (p.role === 'supervisor' || isSupCode(p.code)); }
   var SUP_ROLE_KEY = 'wex-role';
-  var SUP = { list: null, loading: false, error: '', hist: [], histMore: false, histOffset: 0, histLoading: false, histShown: false };
+  var SUP = { guide: null, list: null, loading: false, error: '', hist: [], histMore: false, histOffset: 0, histLoading: false, histShown: false };
   function startSupSession(token, participant) {
     sSet('sessionStorage', TOKEN_KEY, token); sSet('sessionStorage', SUP_ROLE_KEY, 'sup');
     S.token = token; S.participant = participant; S.view = 'sup'; S.pin = ''; S.pin2 = ''; S.error = '';
@@ -1192,6 +1192,7 @@
       if (isExpired(x.resp, x.r)) { expired(); return; }
       if (x.r.ok !== true) { SUP.error = errText(x.r, 'Unable to load your list.'); return; }
       SUP.list = x.r; SUP.error = '';
+      if (SUP.guide == null && sGet('localStorage', 'wexSupGuideSeen') !== 'yes') SUP.guide = 0;
       if (x.r.supervisor) S.participant = Object.assign({}, S.participant || {}, { name: x.r.supervisor.name, code: x.r.supervisor.code, role: 'supervisor' });
     }).catch(function (e) { SUP.error = e.message || 'Unable to load your list.'; })
       .finally(function () { SUP.loading = false; render(); });
@@ -1206,6 +1207,20 @@
       .finally(function () { SUP.histLoading = false; render(); });
   }
   function supWhen(iso) { return iso ? fmtStamp(iso) : ''; }
+  // 2026-10-26: short guide for supervisors (first sign-in, and from "How this works")
+  var SUP_GUIDE = [
+    ['Your WEX timecards', 'Your list shows every WEX at your worksite. Ready for you means the WEX signed and it\u2019s your turn. Sign by noon on the Monday after the pay period ends. If your worksite has two supervisors, only one of you needs to sign.'],
+    ['Check the hours', 'Tap a name to see their shifts, sick time and total hours. If something is wrong, tap Report a problem under that day and add a short note. The WEX gets an email to fix it and sign again, and it comes back to you.'],
+    ['Evaluate and sign', 'If the hours are right, tap Hours are correct. Answer the evaluation questions one at a time. You can skip any of them. Then sign with your finger. Your signature, name, and the date and time go on the timesheet.']
+  ];
+  function supGuideHtml() {
+    var i = SUP.guide, g = SUP_GUIDE[i];
+    return '<div class="overlay"><section role="dialog" aria-modal="true" class="dialog guide"><p class="xs muted">' + (i + 1) + ' of ' + SUP_GUIDE.length + '</p>' +
+      '<h2 class="title mt2" style="font-size:24px">' + esc(g[0]) + '</h2><p class="mt3">' + esc(g[1]) + '</p>' +
+      '<div class="dots">' + SUP_GUIDE.map(function (x, k) { return '<i class="' + (k === i ? 'on' : '') + '"></i>'; }).join('') + '</div>' +
+      '<div class="btn-row"><button class="btn" data-act="' + (i > 0 ? 'supGuideBack' : 'supGuideSkip') + '">' + (i > 0 ? 'Back' : 'Skip') + '</button><button class="btn btn-primary" data-act="supGuideNext">' + (i === SUP_GUIDE.length - 1 ? 'Got it' : 'Next') + '</button></div></section></div>';
+  }
+  function closeSupGuide() { SUP.guide = null; sSet('localStorage', 'wexSupGuideSeen', 'yes'); render(); }
   function supRow(p) {
     var pill = { ready: ['pill-amber', 'Ready for you'], change: ['pill-blue', 'Change requested'], waiting: ['pill-blue', 'Waiting on WEX'], done: ['pill-green', '✓ Signed'] }[p.state] || ['pill-blue', ''];
     var sub = p.state === 'done' ? 'Signed by ' + esc(p.signedBy || '') + (p.signedAt ? ' · ' + esc(supWhen(p.signedAt)) : '') : esc(p.note || '');
@@ -1247,9 +1262,11 @@
         else if (SUP.histMore) h += '<button class="btn mt4" data-act="supHist">Show more</button>';
       }
       h += '</section>';
+      h += '<p style="text-align:center" class="mt4"><button class="link" data-act="supGuideShow">How this works</button></p>';
     }
     h += '</div>';
     if (S.toast) h += '<div class="toast" role="status">' + esc(S.toast) + '</div>';
+    if (SUP.guide != null) h += supGuideHtml();
     return '<main>' + h + '</main>';
   }
 
@@ -1428,6 +1445,10 @@
       case 'supSignBack': if (m && !m.busy) { m.step = 'summary'; m.err = ''; render(); } return true;
       case 'supSign': supSign(); return true;
       case 'supDone': S.modal = null; render(); return true;
+      case 'supGuideShow': SUP.guide = 0; render(); return true;
+      case 'supGuideNext': if (SUP.guide >= SUP_GUIDE.length - 1) closeSupGuide(); else { SUP.guide++; render(); } return true;
+      case 'supGuideBack': if (SUP.guide > 0) { SUP.guide--; render(); } return true;
+      case 'supGuideSkip': closeSupGuide(); return true;
     }
     return false;
   }
