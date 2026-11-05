@@ -175,9 +175,11 @@
   function mealChip(e) { return hasMealPremium(e) ? '<p class="meal-note">Meal premium: +1 hour of pay. You worked over 5 hours without a 30-minute lunch.</p>' : ''; }
   function isSuperseded(e) { return e.superseded === true || e.cancelled === true || [e.status, e.correctionStatus].some(function (s) { return ['SUPERSEDED', 'CANCELLED', 'CANCELED'].indexOf(String(s || '').toUpperCase()) >= 0; }); }
   // 2026-10-26: the supervisor sent the timecard back (and has the WEX changed anything since?)
-  function supAsked() { var tc = (S.status && S.status.timecard) || {}; return tc.status === 'Reopened' && /^Your supervisor asked/.test(tc.reopenReason || ''); }
-  function supFixed() { return supAsked() && S.status.timecard.changedSinceRequest === true; }
-  function supNotes() { return (supAsked() && S.status.timecard.changeRequests) || []; }
+  // 2026-11-04: the request can be on the last pay period (still on the timesheet, not finalized) - priorTimecard
+  function supTc() { var st = S.status || {}; return [st.timecard, st.priorTimecard].filter(function (t) { return t && t.status === 'Reopened' && /^Your supervisor asked/.test(t.reopenReason || ''); })[0] || null; }
+  function supAsked() { return !!supTc(); }
+  function supFixed() { var t = supTc(); return !!t && t.changedSinceRequest === true; }
+  function supNotes() { var t = supTc(); return (t && t.changeRequests) || []; }
   function isSignedNow() { var tc = (S.status && S.status.timecard) || {}; return tc.status === 'Submitted' && !isClosed(); }
   function isClosed() { return (S.status && S.status.timecard && S.status.timecard.closed === true) || S.closedLocal; }
   function allowed() { return ((S.status && S.status.allowedActions) || []).map(function (a) { return String(a).toUpperCase(); }); }
@@ -532,12 +534,13 @@
       if (!x.resp.ok || x.r.ok !== true) { m.err = errText(x.r, 'Unable to add this shift.'); return; }
       m.step = 'done'; m.doneText = x.r.message || 'Your timecard has been updated.';   // fix 4
       render();
-      return refreshAll().then(function () { return wait(2500); }).then(function () { if (S.modal === m) S.modal = null; });
+      refreshAll().catch(function () {}); // 2026-11-04: the message closes after 2 seconds; the hours refresh behind it
+      return wait(2000).then(function () { if (S.modal === m) S.modal = null; });
     }).catch(function (e) {
       // 2026-10-27: no answer - check whether the shift saved before showing an error (a second try would be refused as an overlap).
       if (m.step === 'done') return;
       return confirmSaved(function () { return shiftSaved(f.workDate, f.startTime, f.endTime); }).then(function (ok) {
-        if (ok) { m.step = 'done'; m.doneText = 'Your timecard has been updated.'; render(); return refreshAll().then(function () { return wait(2500); }).then(function () { if (S.modal === m) S.modal = null; }); }
+        if (ok) { m.step = 'done'; m.doneText = 'Your timecard has been updated.'; render(); refreshAll().catch(function () {}); return wait(2000).then(function () { if (S.modal === m) S.modal = null; }); }
         m.err = /did not respond|Unable to connect/.test(e.message || '') ? 'We couldn’t confirm it saved. Check My Hours before adding it again.' : (e.message || 'Unable to add this shift.');
       });
     })
@@ -569,12 +572,13 @@
       if (!x.resp.ok || x.r.ok !== true) { m.err = errText(x.r, 'Unable to save this correction.'); return; }
       m.step = 'done'; m.doneText = x.r.message || 'Your timesheet has been updated.';
       render();
-      return refreshAll().then(function () { return wait(1500); }).then(function () { if (S.modal === m) S.modal = null; });
+      refreshAll().catch(function () {}); // 2026-11-04: the message closes after 2 seconds; the hours refresh behind it
+      return wait(2000).then(function () { if (S.modal === m) S.modal = null; });
     }).catch(function (e) {
       // 2026-10-27: no answer - check whether the fix saved before showing an error.
       if (m.step === 'done') return;
       return confirmSaved(function () { return shiftSaved(m.shift.workDate, f.startTime, f.endTime); }).then(function (ok) {
-        if (ok) { m.step = 'done'; m.doneText = 'Your timesheet has been updated.'; render(); return refreshAll().then(function () { return wait(1500); }).then(function () { if (S.modal === m) S.modal = null; }); }
+        if (ok) { m.step = 'done'; m.doneText = 'Your timesheet has been updated.'; render(); refreshAll().catch(function () {}); return wait(2000).then(function () { if (S.modal === m) S.modal = null; }); }
         m.err = /did not respond|Unable to connect/.test(e.message || '') ? 'We couldn’t confirm it saved. Check My Hours before fixing it again.' : (e.message || 'Unable to save this correction.');
       });
     })
@@ -1000,7 +1004,7 @@
     var st = S.status || {}, tc = st.timecard || {}, closed = isClosed();
     var h = '<section class="section tone-card">';
     if (supFixed()) h += '<div class="callout tone-green"><p class="strong">You changed your hours ✓</p><p class="small mt1">Now sign your timecard again so your supervisor can review it.</p></div>'; // 2026-10-26
-    else if (supAsked()) h += '<div class="callout tone-amber"><p class="strong">Your supervisor asked for a change</p><p class="small mt1">' + esc(String(tc.reopenReason).replace(/^Your supervisor asked for a change: /, '')) + '</p><p class="small mt2">Fix the shift on My Hours, then sign again. If the hours are right, you can sign again without changes.</p><button class="btn mt3" data-tab="hours">Go to My Hours ›</button></div>';
+    else if (supAsked()) h += '<div class="callout tone-amber"><p class="strong">Your supervisor asked for a change</p><p class="small mt1">' + esc(String(supTc().reopenReason).replace(/^Your supervisor asked for a change: /, '')) + '</p><p class="small mt2">Fix the shift on My Hours, then sign again. If the hours are right, you can sign again without changes.</p><button class="btn mt3" data-tab="hours">Go to My Hours ›</button></div>';
     else if (tc.status === 'Reopened') h += '<div class="callout tone-amber"><p class="strong">FCCP reopened your timecard</p><p class="small mt1">Check your shifts, fix anything needed, and sign it again.</p>' + (tc.reopenReason ? '<p class="small mt2"><b>Reason:</b> ' + esc(tc.reopenReason) + '</p>' : '') + '</div>';
     if (!closed && isSignedNow()) { // 2026-10-26: signed, waiting for FCCP
       h += stepsHtml(3) + '<div class="callout tone-green"><p class="strong">Signed ✓</p>' + (tc.submittedAt ? '<p class="small mt1">' + esc(fmtStamp(tc.submittedAt)) + '</p>' : '') + '<p class="small mt1">You’re done for this pay period. If you change a shift, you’ll be asked to sign again.</p></div>';
